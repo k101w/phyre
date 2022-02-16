@@ -17,6 +17,7 @@ import copy
 import numpy as np
 from thrift import TSerialization
 from thrift.protocol import TBinaryProtocol
+import pdb
 
 import phyre.interface.scene.ttypes as scene_if
 import phyre.interface.task.ttypes as task_if
@@ -79,6 +80,7 @@ def simulate_task(task: task_if.Task,
                   steps: int = DEFAULT_MAX_STEPS,
                   stride: int = DEFAULT_STRIDE) -> task_if.TaskSimulation:
     result = simulator_bindings.simulate_task(serialize(task), steps, stride)
+    pdb.set_trace()
     return deserialize(task_if.TaskSimulation(), result)
 
 

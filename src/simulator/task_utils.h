@@ -22,7 +22,7 @@
 constexpr unsigned kObjectFeatureSize = 14;
 constexpr unsigned kNumColors = 6;
 constexpr unsigned kNumShapes = 4;
-constexpr unsigned kFps = 60;
+constexpr unsigned kFps = 60;//  todo:
 constexpr float kTimeStep = 1.0f / kFps;
 constexpr unsigned kVelocityIterations = 15;
 constexpr unsigned kPositionIterations = 20;
