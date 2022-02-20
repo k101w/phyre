@@ -19,12 +19,16 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import csv
 import copy
-from torchdiffeq import odeint, odeint_event
+#from torchdiffeq_all import torchdiffeq
+from torchdiffeq_all.torchdiffeq  import odeint, odeint_event
 
-from pymunk_balls import Balls
-import utils
+#from pymunk_balls import Balls
+#import utils
+import torchdiffeq_all.learn_pymunk.learn_pymunk.utils as utils
+
 import pdb
 import phyre
+import random
 
 try:
     if os.isatty(sys.stdout.fileno()):
@@ -38,27 +42,29 @@ torch.set_default_dtype(torch.float64)
 class PHYRE_simulation():
     def __init__(self,eval_setup,fold_id):
         super().__init__()
-        self.tasks=tasks
-        train_tasks, dev_tasks, test_tasks = phyre.get_fold(eval_setup, fold_id)
-        self.action_tier = phyre.eval_setup_to_action_tier(eval_setup)
-        self.simulator=phyre.initialize_simulator(train_tasks, self.action_tier)
-    def generate(self):
+        #目前先拿000：00的数据进行训练
+        #前600个做train
+        #self.tasks=tasks
+        # train_tasks, dev_tasks, test_tasks = phyre.get_fold(eval_setup, fold_id)
+        # self.action_tier = phyre.eval_setup_to_action_tier(eval_setup)
+        # self.simulator=phyre.initialize_simulator(train_tasks, self.action_tier)
+    # def generate(self):
+        
 
+    #     for task_index in range(len(tasks)):
+    #     task_id = simulator.task_ids[task_index]
+    #     initial_scene = simulator.initial_scenes[task_index]
+    #     plt.imshow(phyre.observations_to_float_rgb(initial_scene))
+    #     print(initial_scene.shape)
+    #     plt.title(f'Task {task_index}');
+    #     plt.savefig('pic/ini{}.png'.format(task_index))
 
-        for task_index in range(len(tasks)):
-        task_id = simulator.task_ids[task_index]
-        initial_scene = simulator.initial_scenes[task_index]
-        plt.imshow(phyre.observations_to_float_rgb(initial_scene))
-        print(initial_scene.shape)
-        plt.title(f'Task {task_index}');
-        plt.savefig('pic/ini{}.png'.format(task_index))
-
-        initial_featurized_objects = simulator.initial_featurized_objects[task_index]
-        print('Initial featurized objects shape=%s dtype=%s' % (initial_featurized_objects.features.shape, initial_featurized_objects.features.dtype))
-        bar=np.array([x for x in initial_featurized_objects.features[0] if x[5]==1])
-        bar=bar.reshape(1,bar.shape[0],-1)
-        ball=np.array([x for x in initial_featurized_objects.features[0] if x[4]==1])
-        ball=ball.reshape(1,ball.shape[0],-1)
+    #     initial_featurized_objects = simulator.initial_featurized_objects[task_index]
+    #     print('Initial featurized objects shape=%s dtype=%s' % (initial_featurized_objects.features.shape, initial_featurized_objects.features.dtype))
+    #     bar=np.array([x for x in initial_featurized_objects.features[0] if x[5]==1])
+    #     bar=bar.reshape(1,bar.shape[0],-1)
+    #     ball=np.array([x for x in initial_featurized_objects.features[0] if x[4]==1])
+    #     ball=ball.reshape(1,ball.shape[0],-1)
 
         # bar=[x for x in initial_featurized_objects.features[0] if x[5]==1]
         # bar=bar.reshape(1,bar.shape[0],-1)
@@ -88,28 +94,28 @@ class PHYRE_simulation():
                 simulation.status)
 
 class HamiltonianDynamics(nn.Module):
-    def __init__(self, n_balls):
+    def __init__(self, n_objects):
         super().__init__()
 
-    def forward(self, t, state):
-        pos, vel, *rest = state
+    def forward(self, t, state):#TODO:
+        pos, vel, diameter,*rest = state
         dvel = torch.zeros_like(pos)
         dpos = vel
-        dvel[:,1] = -17. # TODO: Not sure why this isn't -20. as in pymunk
+        dvel[:,1] = -9.8 # TODO: actually I want to modify the parameter
 
         # Freeze anything going underground
-        I = pos[:,-1] < -1.#Y方向不能超过地面
+        I = pos[:,-1] <= 0.5*diameters #Y方向不能超过地面
         dpos[I] = 0.
-        dvel[I] = 0.
+        dvel[I] = 0. #TODO:其实x方向有摩擦力
 
         return (dpos, dvel, *[torch.zeros_like(r) for r in rest])
 
 
 class EventFn(nn.Module):
-    def __init__(self, n_balls, n_event_latent, init_factor):
+    def __init__(self, n_objects, n_event_latent, init_factor):
         super().__init__()
         self.mod = utils.mlp(
-            input_dim=2*n_balls,
+            input_dim=2*n_objects+2, #add diameters
             hidden_dim=512,
             output_dim=n_event_latent,
             hidden_depth=2,
@@ -126,11 +132,11 @@ class EventFn(nn.Module):
 
     def parameters(self):
         return self.mod.parameters()
-
+#fix
     def forward(self, t, state):
-        pos, _, *params = state
-        pos_flat = pos.view(-1)
-        val = self.fmod(pos_flat, params=params)
+        pos, vel,diameters,*params = state
+        z = torch.cat(pos.view(-1),diameters)
+        val = self.fmod(z, params=params)
         val = torch.prod(val)#返回所有的乘积
 
         # True event function for bounces:
@@ -150,24 +156,23 @@ class EventFn(nn.Module):
 
 
 class InstantaneousStateChange(nn.Module):
-    def __init__(self, event_latents_fn, n_balls, n_event_latent):
+    def __init__(self, event_latents_fn, n_objects, n_event_latent):
         super().__init__()
         self.event_latents_fn = event_latents_fn
         self.net = utils.mlp(
-            input_dim=2*2*n_balls + n_event_latent,
+            input_dim=2*n_objects*3+2*n_objects + n_event_latent+2,
             hidden_dim=512,
-            output_dim=2*n_balls,
+            output_dim=2*n_objects,
             hidden_depth=2,
         )
 
     def forward(self, t, state):
-        pos, vel, *rest = state
+        poses, vel, chosen_dia = state
+        event_latents = self.event_latents_fn(poses[-1].view(-1)).detach()#mod 和 fmod 明明权重共享，我不知道为什么非要分开
+        z = torch.cat(event_latents, poses.view(-1), vel.view(-1), pow(chosen_dia,2))
+        vel = self.net(z).reshape(poses[-1].shape)
 
-        event_latents = self.event_latents_fn(pos.view(-1)).detach()
-        z = torch.cat((event_latents, pos.view(-1), vel.view(-1)))
-        vel = self.net(z).reshape(pos.shape)
-
-        return (pos, vel, *rest)
+        return vel
 
 
 class NeuralPhysics(nn.Module):
@@ -178,16 +183,16 @@ class NeuralPhysics(nn.Module):
 
         # Assume these are known and true:
         self.max_events = cfg.max_events
-        self.n_balls = len(cfg.start_pos)
-        cfg.n_balls = self.n_balls
-        self.initial_pos = torch.tensor(cfg.start_pos).requires_grad_().to(self.device)
-        self.initial_vel = torch.zeros_like(self.initial_pos).requires_grad_().to(self.device)
+        self.n_objects = cfg.n_objects
+        self.n_all_ob = cfg.n_all_ob  #liang
+        #self.initial_pos = torch.tensor(ini_pos).requires_grad_().to(self.device)
+        #self.initial_vel = torch.zeros_like(self.initial_pos).requires_grad_().to(self.device)
         #TODO:
-        self.dynamics_fn = HamiltonianDynamics(self.n_balls)
+        self.dynamics_fn = HamiltonianDynamics(self.n_all_ob)
         #self.event_fn = hydra.utils.instantiate(self.cfg.event_fn)
-        self.event_fn = hydra.utils.instantiate(self.cfg.event_fn)
+        self. event_fn = hydra.utils.instantiate(self.cfg.event_fn)
         self.inst_update = InstantaneousStateChange(
-            self.event_fn.mod, self.n_balls, self.cfg.event_fn.n_event_latent)
+            self.event_fn.mod, self.n_objects, self.cfg.event_fn.n_event_latent)
 
 
     def event_fn_with_termination(self, t1):#t1是end time
@@ -195,56 +200,82 @@ class NeuralPhysics(nn.Module):
             event_fval = self.event_fn(t, state)
             return event_fval * (t - (self.cfg.termination_factor*t1 + 1e-7))
         return event_fn
-#TODO:
-    def forward(self, times):
-        t0 = torch.tensor([0.0]).to(times)
-        state = (self.initial_pos, self.initial_vel, *self.event_fn.parameters())
+    def nearest(self,pos,m):
+        key=pos[m]
+        pos=pos[pos!=key]
+        dis=np.array([np.sqrt(pow(abs(pos[i]-key),2).sum()) for i in range(pos.size(0))])
+        n=np.argmin(dis)
+        return n
+
+#TODO: 两两预测 (碰撞条件里加入diameter)找到最近的event_step
+    def forward(self, steps,ini_pos, diameters):
+        initial_pos = torch.tensor(ini_pos).requires_grad_().to(self.device)
+        initial_vel = torch.zeros_like(initial_pos).requires_grad_().to(self.device)
+        t0 = torch.tensor([0.0]).to(steps)
+        #conbine_pos=torch.stack([initial_pos,initial_pos,initial_pos],dim=0).requires_grad_().to(self.device)
+        state = (initial_pos, initial_vel, diameters, *self.event_fn.parameters())
         event_times = []
-        traj_pos = [state[0].unsqueeze(0)]
-        traj_vel = [state[1].unsqueeze(0)]#INITIAL
-        event_fn_terminal = self.event_fn_with_termination(times[-1])#times[-1]是最终时间
+        traj_pos = [state[0].unsqueeze(0)] 
+        event_fn_terminal = self.event_fn_with_termination(steps[-1])#times[-1]是最终时间
         n_events = 0
-        pdb.set_trace()
-
-        while t0 < times[-1] and n_events < self.max_events:
+        while t0 < steps[-1] and n_events < self.max_events:
+            temp=np.zeros([0])
             last = n_events == self.max_events - 1
-
             if not last:
-                event_t, solution = odeint_event(
-                    self.dynamics_fn, state, t0, event_fn=event_fn_terminal,
-                    atol=1e-8, rtol=1e-8)
+                for m in range(self.n_all_ob):
+                    n=self.nearest(traj_pos[-1],m)
+                    chosen_dia=torch.tensor(diameters[m],diameters[n])
+                    two_state=(torch.tensor(traj_pos[-1][m],traj_pos[-1][n]),torch.tensor(traj_vel[-1][m],traj_vel[-1][n]),chosen_dia,*self.event_fn.parameters())
+                    temp, solution = odeint_event(
+                        self.dynamics_fn, two_state, t0, event_fn=event_fn_terminal,
+                        atol=1e-8, rtol=1e-8)
+                    temps=np.append(temps,temp)
+                event_step=np.min(temps)
             else:
-                event_t = times[-1]
+                event_step = steps[-1]
+            
+            interval_steps = steps[steps > t0]
+            interval_steps = interval_steps[interval_steps <= event_step]
+            interval_steps = torch.cat([t0.reshape(-1), interval_steps.reshape(-1)])
 
-            interval_ts = times[times > t0]
-            interval_ts = interval_ts[interval_ts <= event_t]
-            interval_ts = torch.cat([t0.reshape(-1), interval_ts.reshape(-1)])
-
-            solution_ = odeint(self.dynamics_fn, state, interval_ts, atol=1e-8, rtol=1e-8)
+            solution_ = odeint(self.dynamics_fn, state, interval_steps, atol=1e-8, rtol=1e-8)
             # [0] for position; [1:] to remove intial state.
             traj_pos.append(solution_[0][1:])
             traj_vel.append(solution_[1][1:])
-
+            traj_pos = torch.cat(traj_pos, dim=0)#cat 针对序列
+            traj_vel = torch.cat(traj_vel, dim=0)
             if not last:
-                state = tuple(s[-1] for s in solution)
+                    state = tuple(s[-1] for s in solution_) #我的solution是两两之间的，但是solution_是全部的
+                    
+
             else:#如果是last，就不用再通过odeint_event计算event_t了
-                state = tuple(s[-1] for s in solution_)
+                    state = tuple(s[-1] for s in solution_)
+            mask=torch.zeros_like(traj_pos,dtype=torch.bool)
+            mask[:,m]=True
+            mask[:,n]=True 
+            ins_traj_pos=traj_pos[mask]
+            ins_traj_vel=traj_vel[mask]
+            if(ins_traj_pos.size(0)==1):
+                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-1],ins_traj_pos[-1]],dim=0).requires_grad_().to(self.device)
+            elif(ins_traj_pos.size(0)==2):
+                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-1],ins_traj_pos[-2]],dim=0).requires_grad_().to(self.device)
+            else:
+                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-2],ins_traj_pos[-3]],dim=0).requires_grad_().to(self.device)
+            #加入了碰撞之前的三帧图片
+            combine_state=(combine_pos,ins_traj_vel[-1],chosen_dia)
+            inst_vel = self.inst_update(event_step, combine_state)
+            # step to avoid re-triggering the event fn.认为碰撞后位置发生了微小改变
+            pos, vel, *rest = state
+            pos = pos + 1e-6 * self.dynamics_fn(event_step, state)[0]
+            state = pos, inst_vel, *rest
 
-            # update velocity instantaneously.
-            state = self.inst_update(event_t, state)
-
-            # step to avoid re-triggering the event fn.
-            pos, *rest = state
-            pos = pos + 1e-6 * self.dynamics_fn(event_t, state)[0]
-            state = pos, *rest
-
-            event_times.append(event_t)
-            t0 = event_t
+            event_times.append(event_step)
+            t0 = event_step
             n_events += 1
 
-        traj_pos = torch.cat(traj_pos, dim=0)
-        traj_vel = torch.cat(traj_vel, dim=0)
-        return traj_pos, traj_vel, event_times
+        
+        #traj_vel = torch.cat(traj_vel, dim=0)
+        return traj_pos, event_times
 
 
 def cosine_decay(learning_rate, global_step, decay_steps, alpha=0.0):
@@ -273,6 +304,35 @@ def set_learning_rate(optimizer, lr):
     for group in optimizer.param_groups:
         group['lr'] = lr
 
+def read_data(path,act,n_objects):#to read a certain sequence of an action on a certain task
+    file='act{}'.format(act)
+    gt_pos=[]
+    gt_angle=[]
+    for vec in os.listdir(os.path.join(path,file)):
+        ini_pos=[]
+        ini_angle=[]
+        diameters=[]
+        pos=[]
+        angle=[]
+        #pdb.set_trace()
+        f = open(os.path.join(path,file,vec), 'r')
+        reader=csv.DictReader(f)
+        steps=[0]
+        for row in reader:
+            if(len(steps)==1):#initial
+                ini_pos.append([float(row['x']),float(row['y'])])
+                ini_angle.append(row['angle'])
+                diameters.append(row['diameter'])
+
+            pos.append([float(row['x']),float(row['y'])])
+            angle.append(row['angle'])
+        steps.append(steps[-1]+1)
+        gt_pos.append(pos)
+        gt_angle.append(angle)
+    
+    return ini_pos, ini_angle, gt_pos,gt_angle,diameters,steps
+            
+
 class Workspace(object):
     def __init__(self, cfg):
         # print(cfg)
@@ -280,8 +340,8 @@ class Workspace(object):
         self.cfg = cfg
         self.device = cfg.device
         torch.manual_seed(self.cfg.seed)
-        self.n_balls = len(self.cfg.start_pos)
-
+        self.n_objects = self.cfg.n_objects
+        self.datasets_path=cfg.datasets_path
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
 
@@ -303,40 +363,48 @@ class Workspace(object):
     # @profile
     def run(self):
         with torch.no_grad():
-            system = Balls(start_pos=self.cfg.start_pos)
-            obs_times, gt_pos, gt_vel = system.simulate(n_step=40)
-            obs_times = torch.from_numpy(obs_times).requires_grad_().to(self.device)
-            gt_pos = torch.from_numpy(gt_pos).requires_grad_().to(self.device)
-            gt_vel = torch.from_numpy(gt_vel).requires_grad_().to(self.device)
+            for itr in range(600):
+                self.optimizer.zero_grad()
+                ini_pos,ini_angle,gt_pos,gt_angle,diameters,steps = read_data(self.datasets_path,itr,self.n_objects)
+                gt_pos=torch.tensor(gt_pos).requires_grad_().to(self.device)
+                pos,event_times = self.model(steps,ini_pos,diameters)
+                loss = F.mse_loss(pos, gt_pos) 
+                loss.backward()
 
-        for itr in range(self.cfg.num_iterations):
-            self.optimizer.zero_grad()
-            pos, vel, event_times = self.model(obs_times)
-            # loss = F.mse_loss(pos, gt_pos)
-            loss = F.mse_loss(pos, gt_pos) + 0.1*F.mse_loss(vel, gt_vel)
-            loss.backward()
+                # system = Balls(start_pos=self.cfg.start_pos)
+                # obs_times, gt_pos, gt_vel = system.simulate(n_step=40)
+                # obs_times = torch.from_numpy(obs_times).requires_grad_().to(self.device)
+                # gt_pos = torch.from_numpy(gt_pos).requires_grad_().to(self.device)
+                # gt_vel = torch.from_numpy(gt_vel).requires_grad_().to(self.device)
+
+        # for itr in range(self.cfg.num_iterations):
+        #     self.optimizer.zero_grad()
+        #     pos, vel, event_times = self.model(obs_times)
+        #     # loss = F.mse_loss(pos, gt_pos)
+        #     loss = F.mse_loss(pos, gt_pos) + 0.1*F.mse_loss(vel, gt_vel)
+        #     loss.backward()
 
             # lr = learning_rate_schedule(itr, 0, self.cfg.base_lr, 1.0,
             #                             self.cfg.num_iterations)
             # set_learning_rate(self.optimizer, lr)
-            self.optimizer.step()
+                self.optimizer.step()
 
-            self.writer.writerow({
-                'iter': itr,
-                'loss': loss.item(),
-            })
-            self.logf.flush()
+                self.writer.writerow({
+                    'iter': itr,
+                    'loss': loss.item(),
+                })
+                self.logf.flush()
 
-            if itr % self.cfg.log_interval == 0:
-                print(itr, loss.item(), len(event_times))
+                if itr % self.cfg.log_interval == 0:
+                    print(itr, loss.item(), len(event_times))
 
-            if itr % self.cfg.plot_interval == 0:
-                self.plot(itr, obs_times, pos, gt_pos)
+                if itr % self.cfg.plot_interval == 0:
+                    self.plot(itr, obs_times, pos, gt_pos)
 
-            if itr % self.cfg.save_interval == 0:
-                self.save('latest')
+                if itr % self.cfg.save_interval == 0:
+                    self.save('latest')
 
-            del pos, vel, loss
+                del pos, vel, loss
 
 
     def plot(self, itr, obs_times, states, gt_states):
@@ -347,7 +415,7 @@ class Workspace(object):
         colors = plt.style.library['bmh']['axes.prop_cycle'].by_key()['color']
         for state_dim in range(2):
             ax = axs[state_dim]
-            for i in range(self.n_balls):
+            for i in range(self.n_objects):
                 ax.plot(utils.to_np(obs_times),
                         utils.to_np(states[:,i,state_dim]), color=colors[i])
                 ax.plot(utils.to_np(obs_times),
@@ -404,6 +472,8 @@ from try_ODE import Workspace as W # For saving/loading
 #@hydra.main(config_path='learn_pymunk.yaml', strict=True)
 
 def main(cfg):
+    read_data(cfg.datasets_path,0,cfg.n_objects)
+    #pdb.set_trace()
     workspace = W(cfg)
     workspace.run()
 
