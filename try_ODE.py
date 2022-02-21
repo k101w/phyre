@@ -20,11 +20,11 @@ from omegaconf import DictConfig, OmegaConf
 import csv
 import copy
 #from torchdiffeq_all import torchdiffeq
-from torchdiffeq_all.torchdiffeq  import odeint, odeint_event
+from torchdiffeq.torchdiffeq  import odeint, odeint_event
 
 #from pymunk_balls import Balls
 #import utils
-import torchdiffeq_all.learn_pymunk.learn_pymunk.utils as utils
+import torchdiffeq.learn_pymunk.learn_pymunk.utils as utils
 
 import pdb
 import phyre
