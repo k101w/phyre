@@ -7,7 +7,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm_notebook
-from celluloid import Camera
+#from celluloid import Camera
 import phyre
 import csv
 import os
@@ -71,6 +71,13 @@ def data_pic(tasks,simulator):
 def datasets(tasks,simulator):
       for task_index in range(len(tasks)):
             task_id = simulator.task_ids[task_index]
+            task_id=list(task_id)
+            for i in range(len(task_id)):
+                  if task_id[i] == ':':
+                        task_id[i] = '.'
+            task_id=''.join(task_id)
+                        
+
             imgpath=os.path.join('datasets_img',task_id)
             os.makedirs(imgpath)
             vecpath=os.path.join('datasets_vec',task_id)

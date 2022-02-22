@@ -1,0 +1,21 @@
+device: cuda
+seed: 0
+base_lr: 0.0001
+num_iterations: 10000
+max_events: 30
+termination_factor: 3.0
+start_pos:
+- - 1.0
+  - 1.5
+- - 1.5
+  - 2.5
+n_balls: ??
+event_fn:
+  _target_: learn_pymunk.EventFn
+  n_balls: ${n_balls}
+  n_event_latent: 30
+  init_factor: 5.0
+log_interval: 1
+plot_interval: 10
+save_interval: 10
+experiment: test

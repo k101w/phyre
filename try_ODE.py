@@ -104,11 +104,11 @@ class HamiltonianDynamics(nn.Module):
         dvel[:,1] = -9.8 # TODO: actually I want to modify the parameter
 
         # Freeze anything going underground
-        I = pos[:,-1] <= 0.5*diameters #Y方向不能超过地面
+        I = pos[:,-1] <= 0.5*diameter #Y方向不能超过地面
         dpos[I] = 0.
         dvel[I] = 0. #TODO:其实x方向有摩擦力
 
-        return (dpos, dvel, *[torch.zeros_like(r) for r in rest])
+        return (dpos, dvel,diameter, *[torch.zeros_like(r) for r in rest])
 
 
 class EventFn(nn.Module):
@@ -135,7 +135,7 @@ class EventFn(nn.Module):
 #fix
     def forward(self, t, state):
         pos, vel,diameters,*params = state
-        z = torch.cat(pos.view(-1),diameters)
+        z = torch.cat([pos.view(-1),diameters],dim=0)
         val = self.fmod(z, params=params)
         val = torch.prod(val)#返回所有的乘积
 
@@ -168,9 +168,10 @@ class InstantaneousStateChange(nn.Module):
 
     def forward(self, t, state):
         poses, vel, chosen_dia = state
-        event_latents = self.event_latents_fn(poses[-1].view(-1)).detach()#mod 和 fmod 明明权重共享，我不知道为什么非要分开
-        z = torch.cat(event_latents, poses.view(-1), vel.view(-1), pow(chosen_dia,2))
-        vel = self.net(z).reshape(poses[-1].shape)
+        z1 = torch.cat([poses[-1].view(-1),chosen_dia],dim=0)
+        event_latents = self.event_latents_fn(z1).detach() #mod 和 fmod 明明权重共享，我不知道为什么非要分开
+        z2 = torch.cat([event_latents, poses.view(-1), vel.view(-1), pow(chosen_dia,2)],dim=0)
+        vel = self.net(z2).reshape(poses[-1].shape)
 
         return vel
 
@@ -200,37 +201,41 @@ class NeuralPhysics(nn.Module):
             event_fval = self.event_fn(t, state)
             return event_fval * (t - (self.cfg.termination_factor*t1 + 1e-7))
         return event_fn
+    
     def nearest(self,pos,m):
         key=pos[m]
-        pos=pos[pos!=key]
-        dis=np.array([np.sqrt(pow(abs(pos[i]-key),2).sum()) for i in range(pos.size(0))])
-        n=np.argmin(dis)
+        pos=pos[pos!=key].reshape((-1,2))
+        dis=torch.tensor([torch.sqrt(pow(abs(pos[i]-key),2).sum()) for i in range(pos.size(0))])
+        n=torch.argmin(dis)
         return n
 
 #TODO: 两两预测 (碰撞条件里加入diameter)找到最近的event_step
     def forward(self, steps,ini_pos, diameters):
         initial_pos = torch.tensor(ini_pos).requires_grad_().to(self.device)
+        steps = torch.tensor(steps).requires_grad_().to(self.device)
+        diameters= torch.tensor(diameters).to(self.device)
         initial_vel = torch.zeros_like(initial_pos).requires_grad_().to(self.device)
         t0 = torch.tensor([0.0]).to(steps)
         #conbine_pos=torch.stack([initial_pos,initial_pos,initial_pos],dim=0).requires_grad_().to(self.device)
         state = (initial_pos, initial_vel, diameters, *self.event_fn.parameters())
         event_times = []
-        traj_pos = [state[0].unsqueeze(0)] 
+        traj_pos = state[0].unsqueeze(0) 
+        traj_vel = state[1].unsqueeze(0) 
         event_fn_terminal = self.event_fn_with_termination(steps[-1])#times[-1]是最终时间
         n_events = 0
         while t0 < steps[-1] and n_events < self.max_events:
-            temp=np.zeros([0])
+            temps=[]
             last = n_events == self.max_events - 1
             if not last:
                 for m in range(self.n_all_ob):
                     n=self.nearest(traj_pos[-1],m)
-                    chosen_dia=torch.tensor(diameters[m],diameters[n])
-                    two_state=(torch.tensor(traj_pos[-1][m],traj_pos[-1][n]),torch.tensor(traj_vel[-1][m],traj_vel[-1][n]),chosen_dia,*self.event_fn.parameters())
+                    chosen_dia=torch.tensor([diameters[m],diameters[n]]).to(self.device)
+                    two_state=(torch.stack([traj_pos[-1][m],traj_pos[-1][n]],dim=0),torch.stack([traj_vel[-1][m],traj_vel[-1][n]],dim=0),chosen_dia,*self.event_fn.parameters())
                     temp, solution = odeint_event(
                         self.dynamics_fn, two_state, t0, event_fn=event_fn_terminal,
                         atol=1e-8, rtol=1e-8)
-                    temps=np.append(temps,temp)
-                event_step=np.min(temps)
+                    temps.append(temp)
+                event_step=torch.min(torch.tensor(temps))
             else:
                 event_step = steps[-1]
             
@@ -240,10 +245,10 @@ class NeuralPhysics(nn.Module):
 
             solution_ = odeint(self.dynamics_fn, state, interval_steps, atol=1e-8, rtol=1e-8)
             # [0] for position; [1:] to remove intial state.
-            traj_pos.append(solution_[0][1:])
-            traj_vel.append(solution_[1][1:])
-            traj_pos = torch.cat(traj_pos, dim=0)#cat 针对序列
-            traj_vel = torch.cat(traj_vel, dim=0)
+            # traj_pos.append(solution_[0][1:])
+            # traj_vel.append(solution_[1][1:])
+            traj_pos = torch.cat([traj_pos,solution_[0][1:]], dim=0)#cat 针对序列
+            traj_vel = torch.cat([traj_vel,solution_[1][1:]], dim=0)
             if not last:
                     state = tuple(s[-1] for s in solution_) #我的solution是两两之间的，但是solution_是全部的
                     
@@ -251,23 +256,27 @@ class NeuralPhysics(nn.Module):
             else:#如果是last，就不用再通过odeint_event计算event_t了
                     state = tuple(s[-1] for s in solution_)
             mask=torch.zeros_like(traj_pos,dtype=torch.bool)
+            if(m>n): m,n=n,m
             mask[:,m]=True
             mask[:,n]=True 
-            ins_traj_pos=traj_pos[mask]
-            ins_traj_vel=traj_vel[mask]
+            ins_traj_pos=traj_pos[mask].reshape((-1,2,2))
+            ins_traj_vel=traj_vel[mask].reshape((-1,2,2))
             if(ins_traj_pos.size(0)==1):
-                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-1],ins_traj_pos[-1]],dim=0).requires_grad_().to(self.device)
+                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-1],ins_traj_pos[-1]],dim=0)
             elif(ins_traj_pos.size(0)==2):
-                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-1],ins_traj_pos[-2]],dim=0).requires_grad_().to(self.device)
+                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-1],ins_traj_pos[-2]],dim=0)
             else:
-                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-2],ins_traj_pos[-3]],dim=0).requires_grad_().to(self.device)
+                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-2],ins_traj_pos[-3]],dim=0)
             #加入了碰撞之前的三帧图片
             combine_state=(combine_pos,ins_traj_vel[-1],chosen_dia)
             inst_vel = self.inst_update(event_step, combine_state)
+            new_vel= traj_vel[-1]
+            new_vel[m]=inst_vel[0]
+            new_vel[n]=inst_vel[1]
             # step to avoid re-triggering the event fn.认为碰撞后位置发生了微小改变
             pos, vel, *rest = state
             pos = pos + 1e-6 * self.dynamics_fn(event_step, state)[0]
-            state = pos, inst_vel, *rest
+            state = pos, new_vel, *rest
 
             event_times.append(event_step)
             t0 = event_step
@@ -308,28 +317,30 @@ def read_data(path,act,n_objects):#to read a certain sequence of an action on a 
     file='act{}'.format(act)
     gt_pos=[]
     gt_angle=[]
-    for vec in os.listdir(os.path.join(path,file)):
-        ini_pos=[]
-        ini_angle=[]
-        diameters=[]
-        pos=[]
-        angle=[]
+    length=len(os.listdir(os.path.join(path,file)))
+    steps=[0.]
+    ini_pos=[]
+    ini_angle=[]
+    diameters=[]
+    pos=[]
+    angle=[]
+    for i in range(length):
+        vec='vec{}.csv'.format(i)
         #pdb.set_trace()
         f = open(os.path.join(path,file,vec), 'r')
         reader=csv.DictReader(f)
-        steps=[0]
         for row in reader:
             if(len(steps)==1):#initial
                 ini_pos.append([float(row['x']),float(row['y'])])
-                ini_angle.append(row['angle'])
-                diameters.append(row['diameter'])
+                ini_angle.append(float(row['angle']))
+                diameters.append(float(row['diameter']))
 
             pos.append([float(row['x']),float(row['y'])])
             angle.append(row['angle'])
-        steps.append(steps[-1]+1)
+        steps.append((steps[-1]+1))
         gt_pos.append(pos)
         gt_angle.append(angle)
-    
+    for k in range(len(steps)):steps[k]=steps[k]/length 
     return ini_pos, ini_angle, gt_pos,gt_angle,diameters,steps
             
 
