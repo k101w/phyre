@@ -238,7 +238,7 @@ class NeuralPhysics(nn.Module):
                 event_step=torch.min(torch.tensor(temps))
             else:
                 event_step = steps[-1]
-            
+            if(event_step==1): pdb.set_trace()
             interval_steps = steps[steps > t0]
             interval_steps = interval_steps[interval_steps <= event_step]
             interval_steps = torch.cat([t0.reshape(-1), interval_steps.reshape(-1)])
@@ -322,9 +322,9 @@ def read_data(path,act,n_objects):#to read a certain sequence of an action on a 
     ini_pos=[]
     ini_angle=[]
     diameters=[]
-    pos=[]
-    angle=[]
     for i in range(length):
+        pos=[]
+        angle=[]
         vec='vec{}.csv'.format(i)
         #pdb.set_trace()
         f = open(os.path.join(path,file,vec), 'r')
@@ -340,6 +340,7 @@ def read_data(path,act,n_objects):#to read a certain sequence of an action on a 
         steps.append((steps[-1]+1))
         gt_pos.append(pos)
         gt_angle.append(angle)
+    steps.pop()
     for k in range(len(steps)):steps[k]=steps[k]/length 
     return ini_pos, ini_angle, gt_pos,gt_angle,diameters,steps
             
