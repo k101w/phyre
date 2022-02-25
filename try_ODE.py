@@ -20,11 +20,11 @@ from omegaconf import DictConfig, OmegaConf
 import csv
 import copy
 #from torchdiffeq_all import torchdiffeq
-from torchdiffeq.torchdiffeq  import odeint, odeint_event
+from torchdiffeq_all.torchdiffeq  import odeint, odeint_event
 
 #from pymunk_balls import Balls
 #import utils
-import torchdiffeq.learn_pymunk.learn_pymunk.utils as utils
+import torchdiffeq_all.learn_pymunk.learn_pymunk.utils as utils
 
 import pdb
 import phyre
@@ -135,7 +135,10 @@ class EventFn(nn.Module):
 #fix
     def forward(self, t, state):
         pos, vel,diameters,*params = state
-        z = torch.cat([pos.view(-1),diameters],dim=0)
+        try:
+            z = torch.cat([pos.view(-1),diameters],dim=0)
+        except(RuntimeError):
+            pdb.set_trace()
         val = self.fmod(z, params=params)
         val = torch.prod(val)#返回所有的乘积
 
@@ -212,8 +215,6 @@ class NeuralPhysics(nn.Module):
 #TODO: 两两预测 (碰撞条件里加入diameter)找到最近的event_step
     def forward(self, steps,ini_pos, diameters):
         initial_pos = torch.tensor(ini_pos).requires_grad_().to(self.device)
-        steps = torch.tensor(steps).requires_grad_().to(self.device)
-        diameters= torch.tensor(diameters).to(self.device)
         initial_vel = torch.zeros_like(initial_pos).requires_grad_().to(self.device)
         t0 = torch.tensor([0.0]).to(steps)
         #conbine_pos=torch.stack([initial_pos,initial_pos,initial_pos],dim=0).requires_grad_().to(self.device)
@@ -223,64 +224,68 @@ class NeuralPhysics(nn.Module):
         traj_vel = state[1].unsqueeze(0) 
         event_fn_terminal = self.event_fn_with_termination(steps[-1])#times[-1]是最终时间
         n_events = 0
-        while t0 < steps[-1] and n_events < self.max_events:
-            temps=[]
-            last = n_events == self.max_events - 1
-            if not last:
-                for m in range(self.n_all_ob):
-                    n=self.nearest(traj_pos[-1],m)
-                    chosen_dia=torch.tensor([diameters[m],diameters[n]]).to(self.device)
-                    two_state=(torch.stack([traj_pos[-1][m],traj_pos[-1][n]],dim=0),torch.stack([traj_vel[-1][m],traj_vel[-1][n]],dim=0),chosen_dia,*self.event_fn.parameters())
-                    temp, solution = odeint_event(
-                        self.dynamics_fn, two_state, t0, event_fn=event_fn_terminal,
-                        atol=1e-8, rtol=1e-8)
-                    temps.append(temp)
-                event_step=torch.min(torch.tensor(temps))
-            else:
-                event_step = steps[-1]
-            if(event_step==1): pdb.set_trace()
-            interval_steps = steps[steps > t0]
-            interval_steps = interval_steps[interval_steps <= event_step]
-            interval_steps = torch.cat([t0.reshape(-1), interval_steps.reshape(-1)])
+        try:
+            while t0 < steps[-1] and n_events < self.max_events:
+                temps=[]
+                last = n_events == self.max_events - 1
+                if not last:
+                    for m in range(self.n_all_ob):
+                        n=self.nearest(traj_pos[-1],m)
+                        chosen_dia=torch.tensor([diameters[m],diameters[n]]).to(self.device)
+                        two_state=(torch.stack([traj_pos[-1][m],traj_pos[-1][n]],dim=0),torch.stack([traj_vel[-1][m],traj_vel[-1][n]],dim=0),chosen_dia,*self.event_fn.parameters())
+                        temp, solution = odeint_event(
+                            self.dynamics_fn, two_state, t0, event_fn=event_fn_terminal,
+                            atol=1e-8, rtol=1e-8)
+                        temps.append(temp)
+                    #pdb.set_trace()
+                    event_step=torch.min(torch.tensor(temps)).to(steps)
+                else:
+                    event_step = steps[-1]
+                if(event_step==1): pdb.set_trace()
+                interval_steps = steps[steps > t0]
+                interval_steps = interval_steps[interval_steps <= event_step]
+                interval_steps = torch.cat([t0.reshape(-1), interval_steps.reshape(-1)])
 
-            solution_ = odeint(self.dynamics_fn, state, interval_steps, atol=1e-8, rtol=1e-8)
-            # [0] for position; [1:] to remove intial state.
-            # traj_pos.append(solution_[0][1:])
-            # traj_vel.append(solution_[1][1:])
-            traj_pos = torch.cat([traj_pos,solution_[0][1:]], dim=0)#cat 针对序列
-            traj_vel = torch.cat([traj_vel,solution_[1][1:]], dim=0)
-            if not last:
-                    state = tuple(s[-1] for s in solution_) #我的solution是两两之间的，但是solution_是全部的
-                    
+                solution_ = odeint(self.dynamics_fn, state, interval_steps, atol=1e-8, rtol=1e-8)
+                # [0] for position; [1:] to remove intial state.
+                # traj_pos.append(solution_[0][1:])
+                # traj_vel.append(solution_[1][1:])
+                traj_pos = torch.cat([traj_pos,solution_[0][1:]], dim=0)#cat 针对序列
+                traj_vel = torch.cat([traj_vel,solution_[1][1:]], dim=0)
+                if not last:
+                        state = tuple(s[-1] for s in solution_) #我的solution是两两之间的，但是solution_是全部的
+                        
 
-            else:#如果是last，就不用再通过odeint_event计算event_t了
-                    state = tuple(s[-1] for s in solution_)
-            mask=torch.zeros_like(traj_pos,dtype=torch.bool)
-            if(m>n): m,n=n,m
-            mask[:,m]=True
-            mask[:,n]=True 
-            ins_traj_pos=traj_pos[mask].reshape((-1,2,2))
-            ins_traj_vel=traj_vel[mask].reshape((-1,2,2))
-            if(ins_traj_pos.size(0)==1):
-                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-1],ins_traj_pos[-1]],dim=0)
-            elif(ins_traj_pos.size(0)==2):
-                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-1],ins_traj_pos[-2]],dim=0)
-            else:
-                combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-2],ins_traj_pos[-3]],dim=0)
-            #加入了碰撞之前的三帧图片
-            combine_state=(combine_pos,ins_traj_vel[-1],chosen_dia)
-            inst_vel = self.inst_update(event_step, combine_state)
-            new_vel= traj_vel[-1]
-            new_vel[m]=inst_vel[0]
-            new_vel[n]=inst_vel[1]
-            # step to avoid re-triggering the event fn.认为碰撞后位置发生了微小改变
-            pos, vel, *rest = state
-            pos = pos + 1e-6 * self.dynamics_fn(event_step, state)[0]
-            state = pos, new_vel, *rest
+                else:#如果是last，就不用再通过odeint_event计算event_t了
+                        state = tuple(s[-1] for s in solution_)
+                mask=torch.zeros_like(traj_pos,dtype=torch.bool)
+                if(m>n): m,n=n,m
+                mask[:,m]=True
+                mask[:,n]=True 
+                ins_traj_pos=traj_pos[mask].reshape((-1,2,2))
+                ins_traj_vel=traj_vel[mask].reshape((-1,2,2))
+                if(ins_traj_pos.size(0)==1):
+                    combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-1],ins_traj_pos[-1]],dim=0)
+                elif(ins_traj_pos.size(0)==2):
+                    combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-1],ins_traj_pos[-2]],dim=0)
+                else:
+                    combine_pos=torch.stack([ins_traj_pos[-1],ins_traj_pos[-2],ins_traj_pos[-3]],dim=0)
+                #加入了碰撞之前的三帧图片
+                combine_state=(combine_pos,ins_traj_vel[-1],chosen_dia)
+                inst_vel = self.inst_update(event_step, combine_state)
+                new_vel= traj_vel[-1]
+                new_vel[m]=inst_vel[0]
+                new_vel[n]=inst_vel[1]
+                # step to avoid re-triggering the event fn.认为碰撞后位置发生了微小改变
+                pos, vel, *rest = state
+                pos = pos + 1e-6 * self.dynamics_fn(event_step, state)[0]
+                state = pos, new_vel, *rest
 
-            event_times.append(event_step)
-            t0 = event_step
-            n_events += 1
+                event_times.append(event_step)
+                t0 = event_step
+                n_events += 1
+        except(RuntimeError):
+            pdb.set_trace()
 
         
         #traj_vel = torch.cat(traj_vel, dim=0)
@@ -375,50 +380,58 @@ class Workspace(object):
     # @profile
     def run(self):
         with torch.no_grad():
-            for itr in range(600):
-                self.optimizer.zero_grad()
-                ini_pos,ini_angle,gt_pos,gt_angle,diameters,steps = read_data(self.datasets_path,itr,self.n_objects)
-                gt_pos=torch.tensor(gt_pos).requires_grad_().to(self.device)
-                pos,event_times = self.model(steps,ini_pos,diameters)
-                loss = F.mse_loss(pos, gt_pos) 
-                loss.backward()
+            ini_pos,ini_anle,gt_pos,gt_angle,diameters,steps = read_data(self.datasets_path,0,self.n_objects)
+        for itr in range(600):
+            self.optimizer.zero_grad()
+            gt_pos=torch.tensor(gt_pos).requires_grad_().to(self.device)
+            steps = torch.tensor(steps).requires_grad_().to(self.device)
+            diameters= torch.tensor(diameters).to(self.device)
+            pos,event_times = self.model(steps,ini_pos,diameters)
+            loss = F.mse_loss(pos, gt_pos)
+            loss.requires_grad_(True)
+            loss.backward()
 
-                # system = Balls(start_pos=self.cfg.start_pos)
-                # obs_times, gt_pos, gt_vel = system.simulate(n_step=40)
-                # obs_times = torch.from_numpy(obs_times).requires_grad_().to(self.device)
-                # gt_pos = torch.from_numpy(gt_pos).requires_grad_().to(self.device)
-                # gt_vel = torch.from_numpy(gt_vel).requires_grad_().to(self.device)
+            # system = Balls(start_pos=self.cfg.start_pos)
+            # obs_times, gt_pos, gt_vel = system.simulate(n_step=40)
+            # obs_times = torch.from_numpy(obs_times).requires_grad_().to(self.device)
+            # gt_pos = torch.from_numpy(gt_pos).requires_grad_().to(self.device)
+            # gt_vel = torch.from_numpy(gt_vel).requires_grad_().to(self.device)
 
-        # for itr in range(self.cfg.num_iterations):
-        #     self.optimizer.zero_grad()
-        #     pos, vel, event_times = self.model(obs_times)
-        #     # loss = F.mse_loss(pos, gt_pos)
-        #     loss = F.mse_loss(pos, gt_pos) + 0.1*F.mse_loss(vel, gt_vel)
-        #     loss.backward()
+    # for itr in range(self.cfg.num_iterations):
+    #     self.optimizer.zero_grad()
+    #     pos, vel, event_times = self.model(obs_times)
+    #     # loss = F.mse_loss(pos, gt_pos)
+    #     loss = F.mse_loss(pos, gt_pos) + 0.1*F.mse_loss(vel, gt_vel)
+    #     loss.backward()
 
-            # lr = learning_rate_schedule(itr, 0, self.cfg.base_lr, 1.0,
-            #                             self.cfg.num_iterations)
-            # set_learning_rate(self.optimizer, lr)
-                self.optimizer.step()
+        # lr = learning_rate_schedule(itr, 0, self.cfg.base_lr, 1.0,
+        #                             self.cfg.num_iterations)
+        # set_learning_rate(self.optimizer, lr)
+            self.optimizer.step()
 
-                self.writer.writerow({
-                    'iter': itr,
-                    'loss': loss.item(),
-                })
-                self.logf.flush()
+            self.writer.writerow({
+                'iter': itr,
+                'loss': loss.item(),
+            })
+            self.logf.flush()
 
-                if itr % self.cfg.log_interval == 0:
-                    print(itr, loss.item(), len(event_times))
+            if itr % self.cfg.log_interval == 0:
+                print(itr, loss.item(), len(event_times))
 
-                if itr % self.cfg.plot_interval == 0:
-                    self.plot(itr, obs_times, pos, gt_pos)
+            # if itr % self.cfg.plot_interval == 0:
+            #     self.gif(itr, steps, pos, gt_pos)
 
-                if itr % self.cfg.save_interval == 0:
-                    self.save('latest')
+            if itr % self.cfg.save_interval == 0:
+                self.save('latest')
 
-                del pos, vel, loss
+            del pos, loss
 
-
+    def gif(self,itr,obs_times,pos,duration=0.2):
+        frames=[]
+        for image_name in image_list:
+            frames.append(imageio.imread(image_name))
+        imageio.mimsave(gif_name,frames,'GIF',duration=duration)
+    
     def plot(self, itr, obs_times, states, gt_states):
         nrow, ncol = 2, 2
         fig, axs = plt.subplots(nrow, ncol, figsize=(6*ncol, 4*nrow))
@@ -484,7 +497,7 @@ from try_ODE import Workspace as W # For saving/loading
 #@hydra.main(config_path='learn_pymunk.yaml', strict=True)
 
 def main(cfg):
-    read_data(cfg.datasets_path,0,cfg.n_objects)
+    #read_data(cfg.datasets_path,0,cfg.n_objects)
     #pdb.set_trace()
     workspace = W(cfg)
     workspace.run()
