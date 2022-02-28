@@ -627,14 +627,16 @@ def createTrackerByName(trackerType):
 # print(shared_if.Color)
 #pdb.set_trace()
 # Set video to load
-for i in range(4,6):
+for i in range(0,1):
   gif_name='TracGif/{}.gif'.format(i)
   image_list=[]
   for j in range(1,48):
     image_list.append('tracker_new_{}/MultiTracker{}.jpg'.format(i,j))
   create_gif(image_list,gif_name,duration=1.0)
 pdb.set_trace()
-for i in range(3,4):
+
+
+for i in range(0,1):
   videoPath = "pic/try{}.gif".format(i)
   # Create a video capture object to read videos
   cap = cv.VideoCapture(videoPath)
@@ -651,6 +653,7 @@ for i in range(3,4):
   #frame = frame[59:425,150:502]
   frame = frame[61:423,145:510]
   cv.imwrite('caps/frame{}.png'.format(i),frame)
+  pdb.set_trace()
   #366*352*3
   #pdb.set_trace()
   #cv.imwrite(picpath,frame)

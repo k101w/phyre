@@ -29,6 +29,7 @@ import torchdiffeq_all.learn_pymunk.learn_pymunk.utils as utils
 import pdb
 import phyre
 import random
+import turtle
 
 try:
     if os.isatty(sys.stdout.fileno()):
@@ -97,7 +98,7 @@ class HamiltonianDynamics(nn.Module):
     def __init__(self, n_objects):
         super().__init__()
 
-    def forward(self, t, state):#TODO:
+    def forward(self, t, state):
         pos, vel, diameter,*rest = state
         dvel = torch.zeros_like(pos)
         dpos = vel
@@ -106,8 +107,8 @@ class HamiltonianDynamics(nn.Module):
         # Freeze anything going underground
         I = pos[:,-1] <= 0.5*diameter #Y方向不能超过地面
         dpos[I] = 0.
-        dvel[I] = 0. #TODO:其实x方向有摩擦力
-
+        dvel[I] = 0. #其实x方向有摩擦力
+        pdb.set_trace()
         return (dpos, dvel,diameter, *[torch.zeros_like(r) for r in rest])
 
 
@@ -289,7 +290,7 @@ class NeuralPhysics(nn.Module):
 
         
         #traj_vel = torch.cat(traj_vel, dim=0)
-        return traj_pos, event_times
+        return traj_pos, traj_vel,event_times
 
 
 def cosine_decay(learning_rate, global_step, decay_steps, alpha=0.0):
@@ -368,7 +369,7 @@ class Workspace(object):
         os.makedirs(self.fig_dir)
 
         self.logf = open('log.csv', 'w')
-        fieldnames = ['iter', 'loss']
+        fieldnames = ['iter', 'loss','event_time']
         self.writer = csv.DictWriter(self.logf, fieldnames=fieldnames)
         self.writer.writeheader()
 
@@ -383,11 +384,15 @@ class Workspace(object):
             ini_pos,ini_anle,gt_pos,gt_angle,diameters,steps = read_data(self.datasets_path,0,self.n_objects)
         for itr in range(600):
             self.optimizer.zero_grad()
-            gt_pos=torch.tensor(gt_pos).requires_grad_().to(self.device)
+            gt_pos=torch.tensor(gt_pos)
+            gt_tpos=torch.zeros_like(gt_pos)
+            gt_tpos[1:]=gt_pos[:-1]
+            gt_vel=gt_pos-gt_tpos
+            gt_vel[0]=0
             steps = torch.tensor(steps).requires_grad_().to(self.device)
             diameters= torch.tensor(diameters).to(self.device)
-            pos,event_times = self.model(steps,ini_pos,diameters)
-            loss = F.mse_loss(pos, gt_pos)
+            pos,vel,event_times = self.model(steps,ini_pos,diameters)
+            loss = F.mse_loss(pos, gt_pos) + 0.1*F.mse_loss(vel, gt_vel)
             loss.requires_grad_(True)
             loss.backward()
 
@@ -412,6 +417,7 @@ class Workspace(object):
             self.writer.writerow({
                 'iter': itr,
                 'loss': loss.item(),
+                'event_time': len(event_times),
             })
             self.logf.flush()
 
@@ -427,6 +433,7 @@ class Workspace(object):
             del pos, loss
 
     def gif(self,itr,obs_times,pos,duration=0.2):
+        
         frames=[]
         for image_name in image_list:
             frames.append(imageio.imread(image_name))

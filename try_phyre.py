@@ -16,15 +16,16 @@ def data_pic(tasks,simulator):
       for task_index in range(len(tasks)):
             task_id = simulator.task_ids[task_index]
             imgpath=os.path.join('datasets_pic',task_id)
-            os.mkdir(imgpath)
+            os.makedirs(imgpath)
             #pdb.set_trace()
             #TODO: save the initial scene
-            #initial_scene = simulator.initial_scenes[task_index]
-            # plt.imshow(phyre.observations_to_float_rgb(initial_scene))
-            # print(initial_scene.shape)
-            # plt.title(f'Task {task_index}');
-            # plt.savefig('pic/ini{}.png'.format(task_index))
-
+            initial_scene = simulator.initial_scenes[task_index]
+           #plt.imshow(phyre.observations_to_float_rgb(initial_scene))
+            plt.imshow((initial_scene))
+            print(initial_scene.shape)
+            #plt.title(f'Task {task_index}');
+            plt.savefig('{}/ini{}.png'.format(imgpath,task_index))
+            pdb.set_trace()
             # initial_featurized_objects = simulator.initial_featurized_objects[task_index]
             # print('Initial featurized objects shape=%s dtype=%s' % (initial_featurized_objects.features.shape, initial_featurized_objects.features.dtype))
             # bar=np.array([x for x in initial_featurized_objects.features[0] if x[5]==1])
@@ -55,7 +56,7 @@ def data_pic(tasks,simulator):
             try:
                   for i in range(len(actions)):
                         action=actions[i]
-                        simulation = simulator.simulate_action(task_index, action, need_images=True, need_featurized_objects=True,stride=60)
+                        simulation = simulator.simulate_action(task_index, action, need_images=True, need_featurized_objects=True,stride=1)
                         if(simulation.status==0):continue
                         img_ac=os.imgpath.join(imgpath,'act{}'.format(num))
                         num+=1
@@ -87,7 +88,7 @@ def datasets(tasks,simulator):
             try:
                   for i in range(len(actions)):
                         action=actions[i]
-                        simulation = simulator.simulate_action(task_index, action, need_images=True, need_featurized_objects=True,stride=60)
+                        simulation = simulator.simulate_action(task_index, action, need_images=True, need_featurized_objects=True,stride=1)
                         if(simulation.status==0):continue
                         img_ac=os.path.join(imgpath,'act{}'.format(num))
                         vec_ac=os.path.join(vecpath,'act{}'.format(num))
@@ -97,7 +98,7 @@ def datasets(tasks,simulator):
                         fo=simulation.featurized_objects   
                         for j,image in enumerate(simulation.images):
                               img = phyre.observations_to_float_rgb(image)
-                              plt.imsave('{}/img{}.jpg'.format(img_ac,j),img)
+                              plt.imsave('{}/img{}.png'.format(img_ac,j),img)
                         
                               filename = '{}/vec{}.csv'.format(vec_ac,j)
                               with open (filename,'w') as file_object:
@@ -106,7 +107,7 @@ def datasets(tasks,simulator):
                                     for k in range(fo.num_objects):
                                           writer.writerow({'x':fo.states[j][k][0],'y':fo.states[j][k][1],'angle':fo.states[j][k][2],'diameter':fo.diameters[k],'shape':fo.shapes[k],'color':fo.colors[k]})
 
-
+                        pdb.set_trace()
                         #plt.savefig('{}/act{}_{}.jpg'.format(imgpath,action,j))
                   #if(simulation.status!=0): break
             # May call is_* methods on the status to check the status.
@@ -173,4 +174,4 @@ tasks=['00000:000']
 # Create the simulator from the tasks and tier.
 simulator = phyre.initialize_simulator(tasks, action_tier)
 task_index = 0  # Note, this is a integer index of task within simulator.task_ids.
-datasets(tasks,simulator)
+data_pic(tasks,simulator)
