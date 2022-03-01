@@ -20,8 +20,8 @@ from omegaconf import DictConfig, OmegaConf
 import csv
 import copy
 #from torchdiffeq_all import torchdiffeq
-from torchdiffeq  import odeint, odeint_event
-from torchdiffeq import OdeintAdjointMethod
+from torchdiffeq_all.torchdiffeq  import odeint, odeint_event
+#from torchdiffeq import OdeintAdjointMethod
 #from pymunk_balls import Balls
 #import utils
 import torchdiffeq_all.learn_pymunk.learn_pymunk.utils as utils
@@ -101,7 +101,7 @@ class HamiltonianDynamics(nn.Module):
         self.writer=csv.writer(self.f)
     def forward(self, t, state):
         pos, vel, diameter,*rest = state
-        dvel = torch.zeros_like(pos)
+        dvel = torch.zeros_like(pos).requires_grad_().to(self.device)
         dpos = vel
         dvel[:,1] = -20 # TODO: actually I want to modify the parameter
         # Freeze anything going underground
