@@ -20,8 +20,8 @@ from omegaconf import DictConfig, OmegaConf
 import csv
 import copy
 #from torchdiffeq_all import torchdiffeq
-from torchdiffeq_all.torchdiffeq  import odeint, odeint_event
-
+from torchdiffeq  import odeint, odeint_event
+from torchdiffeq import OdeintAdjointMethod
 #from pymunk_balls import Balls
 #import utils
 import torchdiffeq_all.learn_pymunk.learn_pymunk.utils as utils
@@ -97,19 +97,30 @@ class PHYRE_simulation():
 class HamiltonianDynamics(nn.Module):
     def __init__(self, n_objects):
         super().__init__()
-
+        self.f=open('/home/kewen/phyre_ODE/bug.txt','a')
+        self.writer=csv.writer(self.f)
     def forward(self, t, state):
         pos, vel, diameter,*rest = state
         dvel = torch.zeros_like(pos)
         dpos = vel
-        dvel[:,1] = -9.8 # TODO: actually I want to modify the parameter
-
+        dvel[:,1] = -20 # TODO: actually I want to modify the parameter
         # Freeze anything going underground
         I = pos[:,-1] <= 0.5*diameter #Y方向不能超过地面
+        #q = pos[:,-1] <= 0 #有可能会有负数的情况
+        # if(I.any()==True):pdb.set_trace()    
+        # if(pos.shape[0]==1): pdb.set_trace()   
         dpos[I] = 0.
         dvel[I] = 0. #其实x方向有摩擦力
-        pdb.set_trace()
-        return (dpos, dvel,diameter, *[torch.zeros_like(r) for r in rest])
+        #detach().cpu().numpy()
+        # if(pos.shape[0]==3):
+        #     if(I.any()==True):pdb.set_trace() 
+            # self.writer.writerow(pos)
+            # self.writer.writerow(vel)
+            # self.writer.writerow(diameter)
+            # self.writer.writerow(' ')
+        self.ppos=pos
+        self.pvel=vel
+        return (dpos, dvel,torch.zeros_like(diameter), *[torch.zeros_like(r) for r in rest])
 
 
 class EventFn(nn.Module):
@@ -135,7 +146,7 @@ class EventFn(nn.Module):
         return self.mod.parameters()
 #fix
     def forward(self, t, state):
-        pos, vel,diameters,*params = state
+        pos, vel, diameters,*params = state
         try:
             z = torch.cat([pos.view(-1),diameters],dim=0)
         except(RuntimeError):
@@ -208,9 +219,13 @@ class NeuralPhysics(nn.Module):
     
     def nearest(self,pos,m):
         key=pos[m]
-        pos=pos[pos!=key].reshape((-1,2))
         dis=torch.tensor([torch.sqrt(pow(abs(pos[i]-key),2).sum()) for i in range(pos.size(0))])
-        n=torch.argmin(dis)
+        min=torch.inf
+        for i in range(dis.shape[0]):
+            if(dis[i]!=0):
+                if(dis[i]<min):
+                    min=dis[i]
+                    n=i
         return n
 
 #TODO: 两两预测 (碰撞条件里加入diameter)找到最近的event_step
@@ -235,19 +250,23 @@ class NeuralPhysics(nn.Module):
                         chosen_dia=torch.tensor([diameters[m],diameters[n]]).to(self.device)
                         two_state=(torch.stack([traj_pos[-1][m],traj_pos[-1][n]],dim=0),torch.stack([traj_vel[-1][m],traj_vel[-1][n]],dim=0),chosen_dia,*self.event_fn.parameters())
                         temp, solution = odeint_event(
-                            self.dynamics_fn, two_state, t0, event_fn=event_fn_terminal,
+                            self.dynamics_fn, two_state, t0/steps[-1], event_fn=event_fn_terminal,
                             atol=1e-8, rtol=1e-8)
+                        #pdb.set_trace()
+                        temp=temp*steps[-1] #初始的py_munk只simulate了1s;
                         temps.append(temp)
-                    #pdb.set_trace()
+                        if(temp>20): pdb.set_trace()
+                    #pdb.set_trace()#solution t0 后半部分不可信
                     event_step=torch.min(torch.tensor(temps)).to(steps)
                 else:
                     event_step = steps[-1]
-                if(event_step==1): pdb.set_trace()
+                if(event_step == 1): pdb.set_trace()
                 interval_steps = steps[steps > t0]
                 interval_steps = interval_steps[interval_steps <= event_step]
                 interval_steps = torch.cat([t0.reshape(-1), interval_steps.reshape(-1)])
 
                 solution_ = odeint(self.dynamics_fn, state, interval_steps, atol=1e-8, rtol=1e-8)
+                #pdb.set_trace()
                 # [0] for position; [1:] to remove intial state.
                 # traj_pos.append(solution_[0][1:])
                 # traj_vel.append(solution_[1][1:])
@@ -347,7 +366,7 @@ def read_data(path,act,n_objects):#to read a certain sequence of an action on a 
         gt_pos.append(pos)
         gt_angle.append(angle)
     steps.pop()
-    for k in range(len(steps)):steps[k]=steps[k]/length 
+    for k in range(len(steps)):steps[k]=steps[k]/len(steps) #30fps竟然对应间隔0.08s
     return ini_pos, ini_angle, gt_pos,gt_angle,diameters,steps
             
 
@@ -369,8 +388,10 @@ class Workspace(object):
         os.makedirs(self.fig_dir)
 
         self.logf = open('log.csv', 'w')
-        fieldnames = ['iter', 'loss','event_time']
+        self.posf = open('pos.csv', 'w')
+        fieldnames = ['iter', 'loss', 'event_time', 'event_times']
         self.writer = csv.DictWriter(self.logf, fieldnames=fieldnames)
+        self.pos_writer = csv.writer(self.posf)
         self.writer.writeheader()
 
         self.model = NeuralPhysics(self.cfg).to(self.device)
@@ -384,11 +405,12 @@ class Workspace(object):
             ini_pos,ini_anle,gt_pos,gt_angle,diameters,steps = read_data(self.datasets_path,0,self.n_objects)
         for itr in range(600):
             self.optimizer.zero_grad()
-            gt_pos=torch.tensor(gt_pos)
+            gt_pos=torch.tensor(gt_pos).to(self.device)
             gt_tpos=torch.zeros_like(gt_pos)
             gt_tpos[1:]=gt_pos[:-1]
             gt_vel=gt_pos-gt_tpos
             gt_vel[0]=0
+            #pdb.set_trace()
             steps = torch.tensor(steps).requires_grad_().to(self.device)
             diameters= torch.tensor(diameters).to(self.device)
             pos,vel,event_times = self.model(steps,ini_pos,diameters)
@@ -418,17 +440,19 @@ class Workspace(object):
                 'iter': itr,
                 'loss': loss.item(),
                 'event_time': len(event_times),
+                'event_times': event_times
             })
             self.logf.flush()
-
+            #pdb.set_trace()
             if itr % self.cfg.log_interval == 0:
                 print(itr, loss.item(), len(event_times))
 
-            # if itr % self.cfg.plot_interval == 0:
-            #     self.gif(itr, steps, pos, gt_pos)
-
-            if itr % self.cfg.save_interval == 0:
-                self.save('latest')
+            if itr % self.cfg.plot_interval == 0 and itr!=0:
+                pdb.set_trace()
+                self.pos_writer.writerows(pos.detach().cpu().numpy())
+            self.posf.flush()
+            # if itr % self.cfg.save_interval == 0:
+            #     self.save('latest')
 
             del pos, loss
 

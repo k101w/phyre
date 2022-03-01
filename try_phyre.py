@@ -88,7 +88,7 @@ def datasets(tasks,simulator):
             try:
                   for i in range(len(actions)):
                         action=actions[i]
-                        simulation = simulator.simulate_action(task_index, action, need_images=True, need_featurized_objects=True,stride=1)
+                        simulation = simulator.simulate_action(task_index, action, need_images=True, need_featurized_objects=True,stride=30)
                         if(simulation.status==0):continue
                         img_ac=os.path.join(imgpath,'act{}'.format(num))
                         vec_ac=os.path.join(vecpath,'act{}'.format(num))
@@ -174,4 +174,4 @@ tasks=['00000:000']
 # Create the simulator from the tasks and tier.
 simulator = phyre.initialize_simulator(tasks, action_tier)
 task_index = 0  # Note, this is a integer index of task within simulator.task_ids.
-data_pic(tasks,simulator)
+datasets(tasks,simulator)

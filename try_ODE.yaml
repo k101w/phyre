@@ -22,7 +22,7 @@ event_fn:
 
 
 log_interval: 1
-plot_interval: 10
+plot_interval: 319
 save_interval: 10
 
 experiment: test
