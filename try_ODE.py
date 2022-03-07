@@ -274,8 +274,10 @@ class NeuralPhysics(nn.Module):
             if not last:
                 for m in range(self.n_all_ob):
                     n=self.nearest(traj_pos[-1],m)
-                    chosen_dia=torch.tensor([diameters[m],diameters[n]]).to(self.device)
-                    two_state=(torch.stack([traj_pos[-1][m],traj_pos[-1][n]],dim=0),torch.stack([traj_vel[-1][m],traj_vel[-1][n]],dim=0),torch.tensor([m,n]).to(self.device),chosen_dia,*self.event_fn.parameters())
+                    if(m>n): qm,qn=n,m #保证m<n的顺序不变
+                    else: qm,qn=m,n
+                    chosen_dia=torch.tensor([diameters[qm],diameters[qn]]).to(self.device) #TODO: 好像没有对称不变性
+                    two_state=(torch.stack([traj_pos[-1][qm],traj_pos[-1][qn]],dim=0),torch.stack([traj_vel[-1][qm],traj_vel[-1][qn]],dim=0),torch.tensor([qm,qn]).to(self.device),chosen_dia,*self.event_fn.parameters())
                     temp_t, solution = odeint_event(
                         self.dynamics_fn, two_state, t0, event_fn=event_fn_terminal,
                         atol=1e-8, rtol=1e-8)
@@ -288,19 +290,19 @@ class NeuralPhysics(nn.Module):
                     #if(temp>1): pdb.set_trace()
                 #pdb.set_trace()#solution t0 后半部分不可信
                 if(len(temps)!=0):
-                    event_step=torch.min(torch.tensor(temps)).to(steps)
+                    event_step=torch.min(torch.tensor(temps)).requires_grad_().to(steps)
+                    #pdb.set_trace()
                     solution=solutions[torch.argmin(torch.tensor(temps))]
-                    two=two[torch.argmin(torch.tensor(temps))]
-                pdb.set_trace()   
+                    two=twos[torch.argmin(torch.tensor(temps))] 
                 else:
-                    event_step = steps[-1]
+                    event_step = steps[-1]  
             else:
                 event_step = steps[-1]
             #if(event_step == 1): pdb.set_trace()
             interval_steps = steps[steps > t0]
             interval_steps = interval_steps[interval_steps <= event_step]
             interval_steps = torch.cat([t0.reshape(-1), interval_steps.reshape(-1)])
-
+            #pdb.set_trace()
             solution_ = odeint(self.dynamics_fn, state, interval_steps, atol=1e-8, rtol=1e-8)
             #pdb.set_trace()
             # [0] for position; [1:] to remove intial state.
@@ -308,14 +310,21 @@ class NeuralPhysics(nn.Module):
             # traj_vel.append(solution_[1][1:])
             traj_pos = torch.cat([traj_pos,solution_[0][1:]], dim=0)#cat 针对序列
             traj_vel = torch.cat([traj_vel,solution_[1][1:]], dim=0)
+            #TODO:
             if not event_step == steps[-1]:
-                    state = tuple(s[-1] for s in solution) #我的solution是两两之间的，但是solution_是全部的,但是我需要用这个回传
+                tempstate = tuple(s[-1] for s in solution_)
+                twostate_m = tuple(s[-1][0].unsqueeze(0) for s in solution) #我的solution是两两之间的，但是solution_是全部的,但是我需要用这个回传
+                twostate_n = tuple(s[-1][1].unsqueeze(0) for s in solution)
+                m=two[0].item()
+                n=two[1].item()
+                state=tuple(torch.cat([tempstate[i][:m],twostate_m[i],tempstate[i][m+1:n],twostate_n[i],tempstate[i][n+1:]],0) for i in range(len(tempstate)))
+                a,b,c,d,*rest=state
+                state=a,b, torch.tensor([0]).to(self.device),d,*self.event_fn.parameters()
                     
 
             else:#如果是last，就不用再通过odeint_event计算event_t了
-                    state = tuple(s[-1] for s in solution_)
+                state = tuple(s[-1] for s in solution_)
             mask=torch.zeros_like(traj_pos,dtype=torch.bool)
-            if(m>n): m,n=n,m
             mask[:,m]=True
             mask[:,n]=True 
             ins_traj_pos=traj_pos[mask].reshape((-1,2,2))
@@ -343,9 +352,9 @@ class NeuralPhysics(nn.Module):
             event_times.append(event_step)
             t0 = event_step
             n_events += 1
-            pdb.set_trace()
+            #pdb.set_trace()
 
-        
+        #pdb.set_trace()
         #traj_vel = torch.cat(traj_vel, dim=0)
         return traj_pos, traj_vel,event_times
 
@@ -431,7 +440,7 @@ class Workspace(object):
 
         self.logf = open('log.csv', 'w')
         self.posf = open('pos.csv', 'w')
-        fieldnames = ['iter', 'loss', 'event_time', 'event_times']
+        fieldnames = ['iter', 'loss', 'event_time']
         self.writer = csv.DictWriter(self.logf, fieldnames=fieldnames)
         self.pos_writer = csv.writer(self.posf)
         self.writer.writeheader()
@@ -448,8 +457,8 @@ class Workspace(object):
         with torch.no_grad():
             ini_pos,ini_anle,gt_pos,gt_angle,diameters,steps = read_data(self.datasets_path,0,self.n_objects)
         self.dvel=self.dvel.requires_grad_().to(self.device)
-        self.dvel.retain_grad()
-        for itr in range(600):
+        for itr in range(6000):
+            self.dvel.retain_grad()
             self.optimizer.zero_grad()
             gt_pos=torch.tensor(gt_pos).to(self.device)
             gt_tpos=torch.zeros_like(gt_pos)
@@ -460,10 +469,10 @@ class Workspace(object):
             steps = torch.tensor(steps).requires_grad_().to(self.device)
             diameters= torch.tensor(diameters).to(self.device)
             pos,vel,event_times = self.model(steps,ini_pos,diameters,self.dvel)
-            #pdb.set_trace()
             loss = F.mse_loss(pos, gt_pos) + 0.1*F.mse_loss(vel, gt_vel)
             loss.requires_grad_(True)
             #pdb.set_trace()
+
             loss.backward()
             #pdb.set_trace()
             # system = Balls(start_pos=self.cfg.start_pos)
@@ -482,14 +491,18 @@ class Workspace(object):
         # lr = learning_rate_schedule(itr, 0, self.cfg.base_lr, 1.0,
         #                             self.cfg.num_iterations)
         # set_learning_rate(self.optimizer, lr)
+            self.dvel=self.dvel-0.01*self.dvel.grad
+            #pdb.set_trace()
             self.optimizer.step()
-
-            self.writer.writerow({
-                'iter': itr,
-                'loss': loss.item(),
-                'event_time': len(event_times),
-                'event_times': event_times
-            })
+            try:
+                self.writer.writerow({
+                    'iter': itr,
+                    'loss': loss.item(),
+                    'event_time': len(event_times)
+                    
+                })
+            except(TypeError):
+                pdb.set_trace()
             self.logf.flush()
             #pdb.set_trace()
             if itr % self.cfg.log_interval == 0:

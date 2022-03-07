@@ -88,7 +88,7 @@ def datasets(tasks,simulator):
             try:
                   for i in range(len(actions)):
                         action=actions[i]
-                        simulation = simulator.simulate_action(task_index, action, need_images=True, need_featurized_objects=True,stride=30)
+                        simulation = simulator.simulate_action(task_index, action, need_images=True, need_featurized_objects=True,stride=1)
                         if(simulation.status==0):continue
                         img_ac=os.path.join(imgpath,'act{}'.format(num))
                         vec_ac=os.path.join(vecpath,'act{}'.format(num))
