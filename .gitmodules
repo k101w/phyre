@@ -7,7 +7,7 @@
 [submodule "third-party/googletest"]
 	path = third-party/googletest
 	url = https://github.com/google/googletest.git
+
 [submodule "torchdiffeq_all"]
 	path = torchdiffeq_all
 	url = git@github.com:k101w/torchdiffeq_all.git
-
