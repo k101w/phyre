@@ -118,17 +118,16 @@ class HamiltonianDynamics(nn.Module):
     def forward(self, t, state):
         pos, vel, num,diameter,*rest = state
         dpos = vel
+        pos_temp=torch.ones([self.n_all_ob],dtype=torch.float64)
+        I = pos[:,-1] <= 0.5*diameter
         if(num.shape[0]==2):
             try:
                 m=int(num[0].item())
                 n=int(num[1].item())
-                pos_temp=torch.ones([self.n_all_ob])
-                pos_temp[m]=pos[0][1]
-                pos_temp[n]=pos[1][1]
-                I = pos_temp[:,-1] <= 0.5*diameter
-                pos_temp[I]=2
-                self.dvel=self.hmod(pos_temp)
-                pdb.set_trace()
+                pos_temp[m]=torch.where(I[0],2.,1.)
+                pos_temp[n]=torch.where(I[1],2.,1.)
+                pos_temp=pos_temp.requires_grad_().to(self.device)
+                self.dvel=self.hmod(pos_temp).reshape(-1,2)
             except(ValueError):
                 pdb.set_trace()
             #dvel = torch.zeros_like(pos)
@@ -138,6 +137,10 @@ class HamiltonianDynamics(nn.Module):
         #dvel[:,1] = -20 # TODO: actually I want to modify the parameter
         # Freeze anything going underground
         else:
+            I = pos[:,-1] <= 0.5*diameter
+            pos_temp[I]=2
+            pos_temp=pos_temp.requires_grad_().to(self.device)
+            self.dvel=self.hmod(pos_temp)
             dvel=self.dvel
         # I = pos[:,-1] <= 0.5*diameter #Y方向不能超过地面
         # if(I.any()==True):#有碰撞到地面的情况就不回传梯度了
