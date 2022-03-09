@@ -32,4 +32,5 @@ website/i18n/
 website/node_modules/
 website/yarn.lock
 datasets_img
-datasets_pic
+datasets_vec
+datasets_gif

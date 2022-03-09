@@ -20,11 +20,11 @@ from omegaconf import DictConfig, OmegaConf
 import csv
 import copy
 #from torchdiffeq_all import torchdiffeq
-from torchdiffeq_all.torchdiffeq  import odeint, odeint_event
+from torchdiffeq_all.torchdiffeq_all.torchdiffeq  import odeint, odeint_event
 #from torchdiffeq import OdeintAdjointMethod
 #from pymunk_balls import Balls
 #import utils
-import torchdiffeq_all.learn_pymunk.learn_pymunk.utils as utils
+import torchdiffeq_all.torchdiffeq_all.learn_pymunk.learn_pymunk.utils as utils
 
 import pdb
 #import phyre
@@ -402,21 +402,22 @@ def read_data(path,act,n_objects):#to read a certain sequence of an action on a 
         f = open(os.path.join(path,file,vec), 'r')
         reader=csv.DictReader(f)
         for row in reader:
-            if(len(steps)==1):#initial
+            if(i==0):#initial
                 ini_pos.append([float(row['x']),float(row['y'])])
                 ini_angle.append(float(row['angle']))
                 diameters.append(float(row['diameter']))
 
             pos.append([float(row['x']),float(row['y'])])
             angle.append(row['angle'])
-        steps.append((steps[-1]+1))
+        if(i!=0):
+            steps.append((steps[-1]+1))
         gt_pos.append(pos)
         gt_angle.append(angle)
     # steps.pop()
     # for k in range(len(steps)):steps[k]=steps[k]/len(steps) #30fps竟然对应间隔0.08s
     #TODO: just for test
-    steps=steps[0:4]
-    gt_pos=gt_pos[0:4]
+    steps=steps
+    gt_pos=gt_pos
     for k in range(len(steps)):steps[k]=steps[k]/(len(steps)-1)
     return ini_pos, ini_angle, gt_pos,gt_angle,diameters,steps
             
@@ -428,24 +429,23 @@ class Workspace(object):
         self.cfg = cfg
         self.device = cfg.device
         torch.manual_seed(self.cfg.seed)
+        self.act=cfg.act
         self.n_objects = self.cfg.n_objects
         self.datasets_path=cfg.datasets_path
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
-
+        self.num_iterations=cfg.num_iterations
         self.fig_dir = os.path.join(self.work_dir, 'figs')
         if os.path.exists(self.fig_dir):
             shutil.rmtree(self.fig_dir)
         os.makedirs(self.fig_dir)
 
         self.logf = open('log.csv', 'w')
-        self.posf = open('pos.csv', 'w')
         fieldnames = ['iter', 'loss', 'event_time']
         self.writer = csv.DictWriter(self.logf, fieldnames=fieldnames)
-        self.pos_writer = csv.writer(self.posf)
         self.writer.writeheader()
         self.dvel=torch.zeros([cfg.n_all_ob,2],dtype=float)
-        self.dvel[:,1] = -20.
+        self.dvel[:,1] = cfg.g
 
         self.model = NeuralPhysics(self.cfg).to(self.device)
         self.optimizer = torch.optim.Adam(
@@ -455,9 +455,9 @@ class Workspace(object):
     # @profile
     def run(self):
         with torch.no_grad():
-            ini_pos,ini_anle,gt_pos,gt_angle,diameters,steps = read_data(self.datasets_path,0,self.n_objects)
+            ini_pos,ini_anle,gt_pos,gt_angle,diameters,steps = read_data(self.datasets_path,5,self.n_objects)
         self.dvel=self.dvel.requires_grad_().to(self.device)
-        for itr in range(6000):
+        for itr in range(self.num_iterations):
             self.dvel.retain_grad()
             self.optimizer.zero_grad()
             gt_pos=torch.tensor(gt_pos).to(self.device)
@@ -508,16 +508,22 @@ class Workspace(object):
             if itr % self.cfg.log_interval == 0:
                 print(itr, loss.item(), len(event_times),self.dvel[0][1].item())
 
-            if itr % self.cfg.plot_interval == 0 and itr!=0:
+            if itr % self.cfg.plot_interval == 0:
+                posf = open('pos{}.csv'.format(itr), 'w')
+                pos_writer = csv.writer(posf)
                 #pdb.set_trace()
-                self.pos_writer.writerows(pos.detach().cpu().numpy())
-            self.posf.flush()
+                pos_writer.writerow(torch.tensor(event_times).numpy())
+                pos_writer.writerow(' ')
+                pos_writer.writerow(self.dvel.detach().cpu().numpy())
+                pos_writer.writerow(' ')
+                pos_writer.writerows(pos.detach().cpu().numpy())
+            posf.flush()
             # if itr % self.cfg.save_interval == 0:
             #     self.save('latest')
 
             del pos, loss
 
-    def gif(self,itr,obs_times,pos,duration=0.2):
+    def gif(self,itr,obs_times,pos,duration=0.01):
         
         frames=[]
         for image_name in image_list:

@@ -10,6 +10,4 @@
 [submodule "torchdiffeq_all"]
 	path = torchdiffeq_all
 	url = git@github.com:k101w/torchdiffeq_all.git
-[submodule "torchdiffeq"]
-	path = torchdiffeq
-	url = git@github.com:k101w/torchdiffeq.git
+

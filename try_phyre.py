@@ -11,6 +11,9 @@ from tqdm import tqdm_notebook
 import phyre
 import csv
 import os
+import imageio
+
+
 
 def data_pic(tasks,simulator):
       for task_index in range(len(tasks)):
@@ -83,34 +86,42 @@ def datasets(tasks,simulator):
             os.makedirs(imgpath)
             vecpath=os.path.join('datasets_vec',task_id)
             os.makedirs(vecpath)
+            gifpath=os.path.join('datasets_gif',task_id)
+            os.makedirs(gifpath)
             actions = simulator.build_discrete_action_space(max_actions=1000)
             num=0
+            imgs=[]
             try:
                   for i in range(len(actions)):
+                        imgs=[]
                         action=actions[i]
                         simulation = simulator.simulate_action(task_index, action, need_images=True, need_featurized_objects=True,stride=1)
                         if(simulation.status==0):continue
                         img_ac=os.path.join(imgpath,'act{}'.format(num))
                         vec_ac=os.path.join(vecpath,'act{}'.format(num))
+                        gif_ac=os.path.join(gifpath,'act{}'.format(num))
                         num+=1
                         os.mkdir(img_ac)   
                         os.mkdir(vec_ac)
-                        fo=simulation.featurized_objects   
+                        os.mkdir(gif_ac)
+                        fo=simulation.featurized_objects
+                        #phyre.save_observation_series_to_gif(simulation.images,'{}/gif{}.gif'.format(gif_ac,i))
                         for j,image in enumerate(simulation.images):
                               img = phyre.observations_to_float_rgb(image)
                               plt.imsave('{}/img{}.png'.format(img_ac,j),img)
+                              imgs.append(imageio.imread('{}/img{}.png'.format(img_ac,j)))
                         
                               filename = '{}/vec{}.csv'.format(vec_ac,j)
                               with open (filename,'w') as file_object:
                                     writer=csv.DictWriter(file_object,['x','y','angle','diameter','shape','color'])
                                     writer.writeheader()
                                     for k in range(fo.num_objects):
+                        
                                           writer.writerow({'x':fo.states[j][k][0],'y':fo.states[j][k][1],'angle':fo.states[j][k][2],'diameter':fo.diameters[k],'shape':fo.shapes[k],'color':fo.colors[k]})
-
-                        pdb.set_trace()
+                        imageio.mimsave('{}/gif{}.gif'.format(gif_ac,i), imgs, 'GIF', duration = 0.1)   
                         #plt.savefig('{}/act{}_{}.jpg'.format(imgpath,action,j))
                   #if(simulation.status!=0): break
-            # May call is_* methods on the status to check the status.
+            # May call is_* methods on the status to; check the status.
             except(TypeError):
                   pdb.set_trace()
 

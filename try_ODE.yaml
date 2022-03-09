@@ -1,17 +1,18 @@
 device: cuda
 #cuda
 seed: 0
-
+fold_id: 00
 base_lr: 1e-4
-num_iterations: 10000
+num_iterations: 1000
 max_events: 30
 termination_factor: 3.
-
+act: 9
+g: -20.
 #start_pos: [[1., 1.5], [1.5, 2.5]]
 n_objects: 2 # Set by code
 n_all_ob: 3
 n_actions: 883   #TODO:
-datasets_path: /home/kewen/phyre_ODE/datasets_vec/00000.000
+datasets_path: /home/kewen/work_wkw/phyre_ODE/datasets_vec/00000.000  
 #/mnt/d/phyre/datasets_vec/00000.000
 event_fn:
     _target_: try_ODE.EventFn
@@ -22,7 +23,7 @@ event_fn:
 
 
 log_interval: 1
-plot_interval: 319
+plot_interval: 10
 save_interval: 10
 
 experiment: test
@@ -30,10 +31,11 @@ experiment: test
 hydra:
   # name: ${env}
   run:
-    dir: ./exp_local/${now:%Y.%m.%d}/learn_pymunk/${now:%H%M%S}
+    #dir: ./exp_local/${now:%Y.%m.%d}/try_ODE/${now:%H_%M_%S}
+    dir: ./exp_local/${now:%Y.%m.%d}/${now:%H_%M_%S}/fold${fold_id}/act${act}
   sweep:
-    dir: ./exp/${now:%Y.%m.%d}/learn_pymunk/${now:%H%M%S}
-    subdir: ${hydra.job.num}
+    dir: ./exp/${now:%Y.%m.%d}/try_ODE/${hydra.job.override_dirname}
+    subdir: ${base_lr}
   # launcher:
   #   params:
   #     queue_parameters:
