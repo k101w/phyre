@@ -105,16 +105,21 @@ class HamiltonianDynamics(nn.Module):
         self.n_all_ob= n_all_ob
         self.dvel=torch.zeros([n_all_ob,2])
         self.hmod = utils.mlp(
-            input_dim=n_all_ob, #only position
+            input_dim=1, #only position symbol
             hidden_dim=512,
-            output_dim=2*n_all_ob,
-            hidden_depth=3,
+            output_dim=2,
+            hidden_depth=1,
             output_mod=nn.Tanh(),
         )
         # self.dvel[:,1] = dvel
     def dvel_init(self,dvel):
         self.dvel=torch.clone(dvel) 
         #dvel=dvel.requires_grad_().to(self.device)
+    def get_dvel(self):
+        g=self.hmod(torch.tensor([1.]).unsqueeze(0).to(self.device))
+        f=self.hmod(torch.tensor([2.]).unsqueeze(0).to(self.device))
+        return torch.stack([g,f],dim=0)
+    
     def forward(self, t, state):
         pos, vel, num,diameter,*rest = state
         dpos = vel
@@ -127,12 +132,11 @@ class HamiltonianDynamics(nn.Module):
                 pos_temp[m]=torch.where(I[0],2.,1.)
                 pos_temp[n]=torch.where(I[1],2.,1.)
                 pos_temp=pos_temp.requires_grad_().to(self.device)
-                self.dvel=self.hmod(pos_temp).reshape(-1,2)
             except(ValueError):
                 pdb.set_trace()
             #dvel = torch.zeros_like(pos)
             #dvel=torch.clone(self.dvel) #clone 后的变量是中间变量，梯度会叠加到原变量上
-            dvel=torch.cat([self.dvel[m],self.dvel[n]],dim=0).reshape(-1,2)
+            dvel=torch.stack([self.hmod(pos_temp[m].unsqueeze(0).to(self.device)),self.hmod(pos_temp[n].unsqueeze(0).to(self.device))],dim=0)
             #pdb.set_trace()
         #dvel[:,1] = -20 # TODO: actually I want to modify the parameter
         # Freeze anything going underground
@@ -140,8 +144,9 @@ class HamiltonianDynamics(nn.Module):
             I = pos[:,-1] <= 0.5*diameter
             pos_temp[I]=2
             pos_temp=pos_temp.requires_grad_().to(self.device)
-            self.dvel=self.hmod(pos_temp)
-            dvel=self.dvel
+            for i in range(self.n_all_ob):
+                self.dvel[i]=self.hmod(pos_temp[i].unsqueeze(0).to(self.device))
+            dvel=self.dvel.to(self.device)
         # I = pos[:,-1] <= 0.5*diameter #Y方向不能超过地面
         # if(I.any()==True):#有碰撞到地面的情况就不回传梯度了
         #     dvel_ground=dvel.detach()
@@ -277,6 +282,7 @@ class NeuralPhysics(nn.Module):
         #conbine_pos=torch.stack([initial_pos,initial_pos,initial_pos],dim=0).requires_grad_().to(self.device)
         state = (initial_pos, initial_vel, torch.tensor([0]).to(self.device),diameters, *self.event_fn.parameters())
         event_times = []
+        event_dvel=[]
         traj_pos = state[0].unsqueeze(0) 
         traj_vel = state[1].unsqueeze(0) 
         event_fn_terminal = self.event_fn_with_termination(steps[-1])#times[-1]是最终时间
@@ -380,7 +386,7 @@ class NeuralPhysics(nn.Module):
 
         #pdb.set_trace()
         #traj_vel = torch.cat(traj_vel, dim=0)
-        return traj_pos, traj_vel,event_times
+        return traj_pos, traj_vel,event_times,self.dynamics_fn.get_dvel()
 
 
 def cosine_decay(learning_rate, global_step, decay_steps, alpha=0.0):
@@ -482,7 +488,7 @@ class Workspace(object):
             ini_pos,ini_anle,gt_pos,gt_angle,diameters,steps = read_data(self.datasets_path,5,self.n_objects)
         self.dvel=self.dvel.requires_grad_().to(self.device)
         for itr in range(self.num_iterations):
-            self.dvel.retain_grad()
+            #self.dvel.retain_grad()
             self.optimizer.zero_grad()
             gt_pos=torch.tensor(gt_pos).to(self.device)
             gt_tpos=torch.zeros_like(gt_pos)
@@ -492,12 +498,13 @@ class Workspace(object):
             #pdb.set_trace()
             steps = torch.tensor(steps).requires_grad_().to(self.device)
             diameters= torch.tensor(diameters).to(self.device)
-            pos,vel,event_times = self.model(steps,ini_pos,diameters,self.dvel)
+            pos,vel,event_times,dvel = self.model(steps,ini_pos,diameters,self.dvel)
             loss = F.mse_loss(pos, gt_pos) + 0.1*F.mse_loss(vel, gt_vel)
             loss.requires_grad_(True)
+            torch.autograd.set_detect_anomaly(True)
             #pdb.set_trace()
 
-            loss.backward()
+            loss.backward(retain_graph=True)
             #pdb.set_trace()
             # system = Balls(start_pos=self.cfg.start_pos)
             # obs_times, gt_pos, gt_vel = system.simulate(n_step=40)
@@ -515,7 +522,7 @@ class Workspace(object):
         # lr = learning_rate_schedule(itr, 0, self.cfg.base_lr, 1.0,
         #                             self.cfg.num_iterations)
         # set_learning_rate(self.optimizer, lr)
-            self.dvel=self.dvel-0.01*self.dvel.grad
+            #self.dvel=self.dvel-0.01*self.dvel.grad
             #pdb.set_trace()
             self.optimizer.step()
             try:
@@ -530,7 +537,7 @@ class Workspace(object):
             self.logf.flush()
             #pdb.set_trace()
             if itr % self.cfg.log_interval == 0:
-                print(itr, loss.item(), len(event_times),self.dvel[0][1].item())
+                print(itr, loss.item(), len(event_times))
 
             if itr % self.cfg.plot_interval == 0:
                 posf = open('pos{}.csv'.format(itr), 'w')
@@ -538,7 +545,7 @@ class Workspace(object):
                 #pdb.set_trace()
                 pos_writer.writerow(torch.tensor(event_times).numpy())
                 pos_writer.writerow(' ')
-                pos_writer.writerow(self.dvel.detach().cpu().numpy())
+                pos_writer.writerow(dvel.detach().cpu().numpy())
                 pos_writer.writerow(' ')
                 pos_writer.writerows(pos.detach().cpu().numpy())
             posf.flush()

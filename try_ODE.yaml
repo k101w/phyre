@@ -12,7 +12,7 @@ g: -20.
 n_objects: 2 # Set by code
 n_all_ob: 3
 n_actions: 883   #TODO:
-datasets_path: /home/kewen/work_wkw/phyre_ODE/datasets_vec/00000.000  
+datasets_path: /home/kewen/phyre_ODE/datasets_vec/00000.000  
 #/mnt/d/phyre/datasets_vec/00000.000
 event_fn:
     _target_: try_ODE.EventFn
