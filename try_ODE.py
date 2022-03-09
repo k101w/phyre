@@ -20,11 +20,11 @@ from omegaconf import DictConfig, OmegaConf
 import csv
 import copy
 #from torchdiffeq_all import torchdiffeq
-from torchdiffeq_all.torchdiffeq_all.torchdiffeq  import odeint, odeint_event
+from torchdiffeq_all.torchdiffeq  import odeint, odeint_event
 #from torchdiffeq import OdeintAdjointMethod
 #from pymunk_balls import Balls
 #import utils
-import torchdiffeq_all.torchdiffeq_all.learn_pymunk.learn_pymunk.utils as utils
+import torchdiffeq_all.learn_pymunk.learn_pymunk.utils as utils
 
 import pdb
 #import phyre
@@ -97,12 +97,20 @@ class PHYRE_simulation():
                 simulation.status)
 
 class HamiltonianDynamics(nn.Module):
-    def __init__(self, n_objects,device):
+    def __init__(self, n_all_ob,device):
         super().__init__()
         #self.f=open('/home/kewen/phyre_ODE/bug.txt','a')
         #self.writer=csv.writer(self.f)
         self.device= device
-        self.dvel=torch.zeros([n_objects,2])
+        self.n_all_ob= n_all_ob
+        self.dvel=torch.zeros([n_all_ob,2])
+        self.hmod = utils.mlp(
+            input_dim=n_all_ob, #only position
+            hidden_dim=512,
+            output_dim=2*n_all_ob,
+            hidden_depth=3,
+            output_mod=nn.Tanh(),
+        )
         # self.dvel[:,1] = dvel
     def dvel_init(self,dvel):
         self.dvel=torch.clone(dvel) 
@@ -114,6 +122,13 @@ class HamiltonianDynamics(nn.Module):
             try:
                 m=int(num[0].item())
                 n=int(num[1].item())
+                pos_temp=torch.ones([self.n_all_ob])
+                pos_temp[m]=pos[0][1]
+                pos_temp[n]=pos[1][1]
+                I = pos_temp[:,-1] <= 0.5*diameter
+                pos_temp[I]=2
+                self.dvel=self.hmod(pos_temp)
+                pdb.set_trace()
             except(ValueError):
                 pdb.set_trace()
             #dvel = torch.zeros_like(pos)
@@ -124,14 +139,14 @@ class HamiltonianDynamics(nn.Module):
         # Freeze anything going underground
         else:
             dvel=self.dvel
-        I = pos[:,-1] <= 0.5*diameter #Y方向不能超过地面
-        if(I.any()==True):#有碰撞到地面的情况就不回传梯度了
-            dvel_ground=dvel.detach()
-        #q = pos[:,-1] <= 0 #有可能会有负数的情况
-        # if(I.any()==True):pdb.set_trace()    
-        # if(pos.shape[0]==1): pdb.set_trace()   
-            dpos[I] = 0.
-            dvel_ground[I] = 0. #其实x方向有摩擦力
+        # I = pos[:,-1] <= 0.5*diameter #Y方向不能超过地面
+        # if(I.any()==True):#有碰撞到地面的情况就不回传梯度了
+        #     dvel_ground=dvel.detach()
+        # #q = pos[:,-1] <= 0 #有可能会有负数的情况
+        # # if(I.any()==True):pdb.set_trace()    
+        # # if(pos.shape[0]==1): pdb.set_trace()   
+        #     dpos[I] = 0.
+        #     dvel_ground[I] = 0. #其实x方向有摩擦力
         #dvel=dvel.requires_grad_().to(self.device)
         #detach().cpu().numpy()
         # if(pos.shape[0]==3):
@@ -169,7 +184,6 @@ class EventFn(nn.Module):
 #fix
     def forward(self, t, state):
         pos, vel, _, diameters,*params = state
-        #pdb.set_trace()
         try:
             z = torch.cat([pos.view(-1),diameters],dim=0)
         except(RuntimeError):
@@ -255,7 +269,7 @@ class NeuralPhysics(nn.Module):
     def forward(self, steps,ini_pos, diameters,dvel):
         initial_pos = torch.tensor(ini_pos).requires_grad_().to(self.device)
         initial_vel = torch.zeros_like(initial_pos).requires_grad_().to(self.device)
-        self.dynamics_fn.dvel_init(dvel)
+        #self.dynamics_fn.dvel_init(dvel)
         t0 = torch.tensor([0.0]).to(steps)
         #conbine_pos=torch.stack([initial_pos,initial_pos,initial_pos],dim=0).requires_grad_().to(self.device)
         state = (initial_pos, initial_vel, torch.tensor([0]).to(self.device),diameters, *self.event_fn.parameters())
@@ -277,7 +291,14 @@ class NeuralPhysics(nn.Module):
                     if(m>n): qm,qn=n,m #保证m<n的顺序不变
                     else: qm,qn=m,n
                     chosen_dia=torch.tensor([diameters[qm],diameters[qn]]).to(self.device) #TODO: 好像没有对称不变性
-                    two_state=(torch.stack([traj_pos[-1][qm],traj_pos[-1][qn]],dim=0),torch.stack([traj_vel[-1][qm],traj_vel[-1][qn]],dim=0),torch.tensor([qm,qn]).to(self.device),chosen_dia,*self.event_fn.parameters())
+                    # chosen_pos=torch.zeros_like(traj_pos[-1])
+                    # chosen_pos[qm]=traj_pos[-1][qm]
+                    # chosen_pos[qn]=traj_pos[-1][qn]
+
+                    # chosen_vel=torch.zeros_like(traj_vel[-1])
+                    # chosen_vel[qm]=traj_vel[-1][qm]
+                    # chosen_vel[qn]=traj_vel[-1][qn]
+                    two_state=(torch.stack([traj_pos[-1][m],traj_pos[-1][n]],dim=0),torch.stack([traj_vel[-1][m],traj_vel[-1][n]],dim=0),torch.tensor([qm,qn]).to(self.device),chosen_dia,*self.event_fn.parameters())
                     temp_t, solution = odeint_event(
                         self.dynamics_fn, two_state, t0, event_fn=event_fn_terminal,
                         atol=1e-8, rtol=1e-8)
