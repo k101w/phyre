@@ -2,7 +2,7 @@ device: cuda
 #cuda
 seed: 0
 fold_id: 00
-base_lr: 1e-4
+base_lr: 5e-3
 num_iterations: 1000
 max_events: 30
 termination_factor: 3.

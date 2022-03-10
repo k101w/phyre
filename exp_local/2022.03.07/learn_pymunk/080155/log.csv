@@ -1,2 +1,0 @@
-iter,loss,event_time,event_times
-0,0.0061048898500090714,5,"[tensor(0.1159, device='cuda:0', grad_fn=<ToCopyBackward0>), tensor(0.2327, device='cuda:0', grad_fn=<ToCopyBackward0>), tensor(0.3496, device='cuda:0', grad_fn=<ToCopyBackward0>), tensor(0.3722, device='cuda:0', grad_fn=<ToCopyBackward0>), tensor(1., device='cuda:0', grad_fn=<SelectBackward0>)]"

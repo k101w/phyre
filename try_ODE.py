@@ -105,7 +105,7 @@ class HamiltonianDynamics(nn.Module):
         self.n_all_ob= n_all_ob
         self.dvel=torch.zeros([n_all_ob,2])
         self.hmod = utils.mlp(
-            input_dim=1, #only position symbol
+            input_dim=2+1, #position+diameter
             hidden_dim=512,
             output_dim=2,
             hidden_depth=1,
@@ -123,30 +123,33 @@ class HamiltonianDynamics(nn.Module):
     def forward(self, t, state):
         pos, vel, num,diameter,*rest = state
         dpos = vel
-        pos_temp=torch.ones([self.n_all_ob],dtype=torch.float64)
-        I = pos[:,-1] <= 0.5*diameter
+        # pos_temp=torch.ones([self.n_all_ob],dtype=torch.float64)
+        # I = pos[:,-1] <= 0.5*diameter
         if(num.shape[0]==2):
             try:
                 m=int(num[0].item())
                 n=int(num[1].item())
-                pos_temp[m]=torch.where(I[0],2.,1.)
-                pos_temp[n]=torch.where(I[1],2.,1.)
-                pos_temp=pos_temp.requires_grad_().to(self.device)
+                # pos_temp[m]=torch.where(I[0],2.,1.)
+                # pos_temp[n]=torch.where(I[1],2.,1.)
+                # pos_temp=pos_temp.requires_grad_().to(self.device)
             except(ValueError):
                 pdb.set_trace()
             #dvel = torch.zeros_like(pos)
             #dvel=torch.clone(self.dvel) #clone 后的变量是中间变量，梯度会叠加到原变量上
-            dvel=torch.stack([self.hmod(pos_temp[m].unsqueeze(0).to(self.device)),self.hmod(pos_temp[n].unsqueeze(0).to(self.device))],dim=0)
+            dvel=-torch.stack([self.hmod(torch.cat([pos[0],diameter[0].unsqueeze(0)],dim=0)),self.hmod(torch.cat([pos[1],diameter[1].unsqueeze(0)],dim=0))],dim=0)
             #pdb.set_trace()
         #dvel[:,1] = -20 # TODO: actually I want to modify the parameter
         # Freeze anything going underground
         else:
-            I = pos[:,-1] <= 0.5*diameter
-            pos_temp[I]=2
-            pos_temp=pos_temp.requires_grad_().to(self.device)
+            # I = pos[:,-1] <= 0.5*diameter
+            # pos_temp[I]=2
+            # pos_temp=pos_temp.requires_grad_().to(self.device)
+            dvel=[]
             for i in range(self.n_all_ob):
-                self.dvel[i]=self.hmod(pos_temp[i].unsqueeze(0).to(self.device))
-            dvel=self.dvel.to(self.device)
+                dvel.append(-self.hmod(torch.cat([pos[i],diameter[i].unsqueeze(0)],dim=0)))
+            dvel=torch.stack(dvel,dim=0)
+                
+        
         # I = pos[:,-1] <= 0.5*diameter #Y方向不能超过地面
         # if(I.any()==True):#有碰撞到地面的情况就不回传梯度了
         #     dvel_ground=dvel.detach()
@@ -163,8 +166,7 @@ class HamiltonianDynamics(nn.Module):
             # self.writer.writerow(vel)
             # self.writer.writerow(diameter)
             # self.writer.writerow(' ')
-        self.ppos=pos
-        self.pvel=vel
+        
         return (dpos, dvel,torch.zeros(num.shape[0]).to(self.device),torch.zeros_like(diameter), *[torch.zeros_like(r) for r in rest])
 
 
@@ -175,7 +177,7 @@ class EventFn(nn.Module):
             input_dim=2*n_objects+2, #add diameters
             hidden_dim=512,
             output_dim=n_event_latent,
-            hidden_depth=2,
+            hidden_depth=3,
             output_mod=nn.Tanh(),
         )
         def init(m):
@@ -221,9 +223,9 @@ class InstantaneousStateChange(nn.Module):
         self.event_latents_fn = event_latents_fn
         self.net = utils.mlp(
             input_dim=2*n_objects*3+2*n_objects + n_event_latent+2,
-            hidden_dim=512,
+            hidden_dim=1024,
             output_dim=2*n_objects,
-            hidden_depth=2,
+            hidden_depth=3,
         )
 
     def forward(self, t, state):
@@ -386,8 +388,7 @@ class NeuralPhysics(nn.Module):
 
         #pdb.set_trace()
         #traj_vel = torch.cat(traj_vel, dim=0)
-        return traj_pos, traj_vel,event_times,self.dynamics_fn.get_dvel()
-
+        return traj_pos, traj_vel,event_times
 
 def cosine_decay(learning_rate, global_step, decay_steps, alpha=0.0):
     global_step = min(global_step, decay_steps)
@@ -498,13 +499,12 @@ class Workspace(object):
             #pdb.set_trace()
             steps = torch.tensor(steps).requires_grad_().to(self.device)
             diameters= torch.tensor(diameters).to(self.device)
-            pos,vel,event_times,dvel = self.model(steps,ini_pos,diameters,self.dvel)
+            pos,vel,event_times = self.model(steps,ini_pos,diameters,self.dvel)
             loss = F.mse_loss(pos, gt_pos) + 0.1*F.mse_loss(vel, gt_vel)
             loss.requires_grad_(True)
-            torch.autograd.set_detect_anomaly(True)
             #pdb.set_trace()
 
-            loss.backward(retain_graph=True)
+            loss.backward()
             #pdb.set_trace()
             # system = Balls(start_pos=self.cfg.start_pos)
             # obs_times, gt_pos, gt_vel = system.simulate(n_step=40)
@@ -545,8 +545,8 @@ class Workspace(object):
                 #pdb.set_trace()
                 pos_writer.writerow(torch.tensor(event_times).numpy())
                 pos_writer.writerow(' ')
-                pos_writer.writerow(dvel.detach().cpu().numpy())
-                pos_writer.writerow(' ')
+                # pos_writer.writerow(dvel.detach().cpu().numpy())
+                # pos_writer.writerow(' ')
                 pos_writer.writerows(pos.detach().cpu().numpy())
             posf.flush()
             # if itr % self.cfg.save_interval == 0:
